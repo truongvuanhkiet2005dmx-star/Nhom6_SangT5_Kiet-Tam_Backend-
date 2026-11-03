@@ -12,6 +12,7 @@ namespace SmartMoney.Api.Controllers;
 [Authorize]
 public class WalletsController : ControllerBase
 {
+    private const long MaxMoneyValue = 1_000_000_000_000L;
     private readonly AppDbContext _db;
 
     public WalletsController(AppDbContext db)
@@ -38,7 +39,7 @@ public class WalletsController : ControllerBase
             .Where(t => t.UserId == userId &&
                         (t.WalletId.HasValue && walletIds.Contains(t.WalletId.Value) ||
                          t.ToWalletId.HasValue && walletIds.Contains(t.ToWalletId.Value)))
-            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId })
+            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId, t.AdjustmentDirection })
             .ToListAsync();
 
         var result = new List<object>();
@@ -61,13 +62,25 @@ public class WalletsController : ControllerBase
                 .Where(t => t.Type == "transfer" && t.ToWalletId == wallet.Id)
                 .Sum(t => t.Amount);
 
+            var adjustmentIncrease = transactions
+                .Where(t => t.Type == "adjustment" &&
+                            t.WalletId == wallet.Id &&
+                            t.AdjustmentDirection == "increase")
+                .Sum(t => t.Amount);
+
+            var adjustmentDecrease = transactions
+                .Where(t => t.Type == "adjustment" &&
+                            t.WalletId == wallet.Id &&
+                            t.AdjustmentDirection == "decrease")
+                .Sum(t => t.Amount);
+
             result.Add(new
             {
                 wallet.Id,
                 wallet.Name,
                 wallet.Type,
                 wallet.InitialBalance,
-                CurrentBalance = wallet.InitialBalance + income - expense - transferOut + transferIn,
+                CurrentBalance = wallet.InitialBalance + income - expense - transferOut + transferIn + adjustmentIncrease - adjustmentDecrease,
                 wallet.CreatedAtUtc
             });
         }
@@ -92,7 +105,7 @@ public class WalletsController : ControllerBase
         var transactions = await _db.FamilyTransactions
             .Where(t => t.UserId == userId &&
                         (t.WalletId == wallet.Id || t.ToWalletId == wallet.Id))
-            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId })
+            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId, t.AdjustmentDirection })
             .ToListAsync();
 
         var income = transactions
@@ -111,13 +124,25 @@ public class WalletsController : ControllerBase
             .Where(t => t.Type == "transfer" && t.ToWalletId == wallet.Id)
             .Sum(t => t.Amount);
 
+        var adjustmentIncrease = transactions
+            .Where(t => t.Type == "adjustment" &&
+                        t.WalletId == wallet.Id &&
+                        t.AdjustmentDirection == "increase")
+            .Sum(t => t.Amount);
+
+        var adjustmentDecrease = transactions
+            .Where(t => t.Type == "adjustment" &&
+                        t.WalletId == wallet.Id &&
+                        t.AdjustmentDirection == "decrease")
+            .Sum(t => t.Amount);
+
         return Ok(new
         {
             wallet.Id,
             wallet.Name,
             wallet.Type,
             wallet.InitialBalance,
-            CurrentBalance = wallet.InitialBalance + income - expense - transferOut + transferIn,
+            CurrentBalance = wallet.InitialBalance + income - expense - transferOut + transferIn + adjustmentIncrease - adjustmentDecrease,
             wallet.CreatedAtUtc
         });
     }
@@ -133,6 +158,9 @@ public class WalletsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest("Tên ví không được để trống.");
 
+        if (string.IsNullOrWhiteSpace(request.Type))
+            return BadRequest("Type là bắt buộc khi tạo ví.");
+
         var type = request.Type.Trim().ToLowerInvariant();
         if (type != "cash" && type != "bank" && type != "ewallet")
             return BadRequest("Type chỉ nhận cash, bank hoặc ewallet.");
@@ -140,6 +168,8 @@ public class WalletsController : ControllerBase
         var initialBalance = request.InitialBalance ?? 0;
         if (initialBalance < 0)
             return BadRequest("Số dư ban đầu không được âm.");
+        if (initialBalance > MaxMoneyValue)
+            return BadRequest("Số dư ban đầu không được vượt quá 1.000.000.000.000 VND.");
 
         var wallet = new Wallet
         {
@@ -183,15 +213,24 @@ public class WalletsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest("Tên ví không được để trống.");
 
-        var type = request.Type.Trim().ToLowerInvariant();
-        if (type != "cash" && type != "bank" && type != "ewallet")
-            return BadRequest("Type chỉ nhận cash, bank hoặc ewallet.");
+        var type = wallet.Type;
+        if (request.Type != null)
+        {
+            if (string.IsNullOrWhiteSpace(request.Type))
+                return BadRequest("Type không được để trống.");
+
+            type = request.Type.Trim().ToLowerInvariant();
+            if (type != "cash" && type != "bank" && type != "ewallet")
+                return BadRequest("Type chỉ nhận cash, bank hoặc ewallet.");
+        }
 
         var initialBalanceWasSupplied = request.InitialBalance.HasValue;
         var initialBalance = request.InitialBalance ?? wallet.InitialBalance;
 
         if (initialBalance < 0)
             return BadRequest("Số dư ban đầu không được âm.");
+        if (initialBalance > MaxMoneyValue)
+            return BadRequest("Số dư ban đầu không được vượt quá 1.000.000.000.000 VND.");
 
         var hasTransactions = await _db.FamilyTransactions.AnyAsync(t =>
             t.UserId == userId &&
@@ -269,6 +308,6 @@ public class WalletsController : ControllerBase
 public class WalletRequest
 {
     public string Name { get; set; } = "";
-    public string Type { get; set; } = "cash";
+    public string? Type { get; set; }
     public long? InitialBalance { get; set; }
 }

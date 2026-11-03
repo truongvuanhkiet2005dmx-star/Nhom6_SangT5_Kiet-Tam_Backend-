@@ -33,6 +33,9 @@ public class ReportsController : ControllerBase
         var reportYear = year ?? DateTime.UtcNow.Year;
         var reportMonth = month ?? DateTime.UtcNow.Month;
 
+        if (reportYear < 2000 || reportYear > 2100)
+            return BadRequest("Năm phải nằm trong khoảng từ 2000 đến 2100.");
+
         if (reportMonth < 1 || reportMonth > 12)
             return BadRequest("Tháng phải nằm trong khoảng từ 1 đến 12.");
 
@@ -45,7 +48,8 @@ public class ReportsController : ControllerBase
             .Where(t =>
                 t.OccurredAtUtc >= start &&
                 t.OccurredAtUtc < end &&
-                t.Type != "transfer");
+                t.Type != "transfer" &&
+                t.Type != "adjustment");
 
         if (familyGroupId.HasValue)
         {

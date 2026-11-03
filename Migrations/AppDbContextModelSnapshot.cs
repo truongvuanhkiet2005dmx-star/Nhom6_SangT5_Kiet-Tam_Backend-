@@ -343,6 +343,9 @@ namespace Backend_Nhom6_Kiet_Tam_App_QuanLyChiTieu.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("AdjustmentDirection")
+                        .HasColumnType("TEXT");
+
                     b.Property<long>("Amount")
                         .HasColumnType("INTEGER");
 

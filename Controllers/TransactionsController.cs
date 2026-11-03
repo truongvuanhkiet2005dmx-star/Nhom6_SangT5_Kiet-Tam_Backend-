@@ -13,6 +13,7 @@ namespace SmartMoney.Api.Controllers;
 [Authorize]
 public class TransactionsController : ControllerBase
 {
+    private const long MaxAmount = 1_000_000_000_000L;
     private readonly AppDbContext _db;
     private readonly BudgetAlertService _alerts;
     private readonly ILogger<TransactionsController> _logger;
@@ -73,11 +74,18 @@ public class TransactionsController : ControllerBase
 
         if (request.Amount <= 0)
             return BadRequest("Số tiền phải lớn hơn 0.");
+        if (request.Amount > MaxAmount)
+            return BadRequest("Số tiền không được vượt quá 1.000.000.000.000 VND.");
+
+        if (request.OccurredAtUtc.HasValue &&
+            !IsValidOccurredAtUtc(request.OccurredAtUtc.Value))
+            return BadRequest("OccurredAtUtc phải từ năm 2000 và không được quá xa trong tương lai.");
 
         if (request.Type != "income" &&
             request.Type != "expense" &&
-            request.Type != "transfer")
-            return BadRequest("Type chỉ nhận income, expense hoặc transfer.");
+            request.Type != "transfer" &&
+            request.Type != "adjustment")
+            return BadRequest("Type chỉ nhận income, expense, transfer hoặc adjustment.");
 
         if (string.IsNullOrWhiteSpace(request.EventId))
             return BadRequest(new ProblemDetails
@@ -86,19 +94,6 @@ public class TransactionsController : ControllerBase
                 Title = "EventId bắt buộc",
                 Detail = "EventId là khóa đồng bộ ổn định; vui lòng gửi cùng EventId khi retry."
             });
-
-        if (!request.WalletId.HasValue)
-        {
-            return BadRequest("Income và expense bắt buộc phải có WalletId thuộc tài khoản của bạn.");
-        }
-
-        var ownsSourceWallet = await _db.Wallets.AnyAsync(w =>
-            w.Id == request.WalletId.Value && w.UserId == userId);
-
-        if (!ownsSourceWallet)
-        {
-            return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
-        }
 
         if (request.Type == "transfer")
         {
@@ -115,9 +110,35 @@ public class TransactionsController : ControllerBase
             if (ownedWalletCount != 2)
                 return BadRequest("Ví nguồn hoặc ví đích không thuộc tài khoản của bạn.");
         }
-        else if (request.ToWalletId.HasValue)
+        else if (request.Type == "adjustment")
         {
-            return BadRequest("ToWalletId chỉ được dùng khi Type là transfer.");
+            if (!request.WalletId.HasValue)
+                return BadRequest("Điều chỉnh số dư bắt buộc phải có WalletId thuộc tài khoản của bạn.");
+
+            var ownsWallet = await _db.Wallets.AnyAsync(w =>
+                w.Id == request.WalletId.Value && w.UserId == userId);
+            if (!ownsWallet)
+                return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
+
+            if (!IsValidAdjustmentDirection(request.AdjustmentDirection))
+                return BadRequest("AdjustmentDirection chỉ nhận increase hoặc decrease.");
+
+            if (request.ToWalletId.HasValue)
+                return BadRequest("ToWalletId không được dùng khi Type là adjustment.");
+        }
+        else
+        {
+            if (!request.WalletId.HasValue)
+                return BadRequest("Giao dịch income hoặc expense bắt buộc phải có WalletId thuộc tài khoản của bạn.");
+
+            var ownsSourceWallet = await _db.Wallets.AnyAsync(w =>
+                w.Id == request.WalletId.Value && w.UserId == userId);
+
+            if (!ownsSourceWallet)
+                return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
+
+            if (request.ToWalletId.HasValue)
+                return BadRequest("ToWalletId chỉ được dùng khi Type là transfer.");
         }
 
         if (request.FamilyGroupId.HasValue)
@@ -157,6 +178,9 @@ public class TransactionsController : ControllerBase
             ToWalletId = request.Type == "transfer" ? request.ToWalletId : null,
             Amount = request.Amount,
             Type = request.Type,
+            AdjustmentDirection = request.Type == "adjustment"
+                ? request.AdjustmentDirection?.Trim().ToLowerInvariant()
+                : null,
             CategoryName = request.CategoryName ?? "Khác",
             Source = request.Source ?? "",
             BankName = request.BankName ?? "",
@@ -195,7 +219,7 @@ public class TransactionsController : ControllerBase
             throw;
         }
 
-        if (transaction.FamilyGroupId.HasValue)
+        if (transaction.Type != "adjustment" && transaction.FamilyGroupId.HasValue)
         {
             var occurred = transaction.OccurredAtUtc;
             try
@@ -225,6 +249,12 @@ public class TransactionsController : ControllerBase
             transaction.ToWalletId != request.ToWalletId ||
             transaction.Amount != request.Amount ||
             !string.Equals(transaction.Type, request.Type, StringComparison.Ordinal) ||
+            !string.Equals(
+                transaction.AdjustmentDirection,
+                request.Type == "adjustment"
+                    ? request.AdjustmentDirection?.Trim().ToLowerInvariant()
+                    : null,
+                StringComparison.Ordinal) ||
             !string.Equals(
                 transaction.CategoryName,
                 request.CategoryName ?? "Khác",
@@ -259,11 +289,18 @@ public class TransactionsController : ControllerBase
 
         if (request.Amount <= 0)
             return BadRequest("Số tiền phải lớn hơn 0.");
+        if (request.Amount > MaxAmount)
+            return BadRequest("Số tiền không được vượt quá 1.000.000.000.000 VND.");
+
+        if (request.OccurredAtUtc.HasValue &&
+            !IsValidOccurredAtUtc(request.OccurredAtUtc.Value))
+            return BadRequest("OccurredAtUtc phải từ năm 2000 và không được quá xa trong tương lai.");
 
         if (request.Type != "income" &&
             request.Type != "expense" &&
-            request.Type != "transfer")
-            return BadRequest("Type chỉ nhận income, expense hoặc transfer.");
+            request.Type != "transfer" &&
+            request.Type != "adjustment")
+            return BadRequest("Type chỉ nhận income, expense, transfer hoặc adjustment.");
 
         if (!string.IsNullOrWhiteSpace(request.EventId) &&
             !string.Equals(transaction.EventId, request.EventId.Trim(), StringComparison.Ordinal))
@@ -274,19 +311,6 @@ public class TransactionsController : ControllerBase
                 Title = "Không thể đổi EventId",
                 Detail = "EventId là khóa đồng bộ; API bỏ qua hoặc thay đổi EventId sẽ không được xử lý."
             });
-        }
-
-        if (!request.WalletId.HasValue)
-        {
-            return BadRequest("Income và expense bắt buộc phải có WalletId thuộc tài khoản của bạn.");
-        }
-
-        var ownsSourceWallet = await _db.Wallets.AnyAsync(w =>
-            w.Id == request.WalletId.Value && w.UserId == userId);
-
-        if (!ownsSourceWallet)
-        {
-            return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
         }
 
         if (request.Type == "transfer")
@@ -304,9 +328,40 @@ public class TransactionsController : ControllerBase
             if (ownedWalletCount != 2)
                 return BadRequest("Ví nguồn hoặc ví đích không thuộc tài khoản của bạn.");
         }
-        else if (request.ToWalletId.HasValue)
+        else if (request.Type == "adjustment")
         {
-            return BadRequest("ToWalletId chỉ được dùng khi Type là transfer.");
+            if (!request.WalletId.HasValue)
+                return BadRequest("Điều chỉnh số dư bắt buộc phải có WalletId thuộc tài khoản của bạn.");
+
+            var ownsWallet = await _db.Wallets.AnyAsync(w =>
+                w.Id == request.WalletId.Value && w.UserId == userId);
+            if (!ownsWallet)
+                return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
+
+            if (!IsValidAdjustmentDirection(request.AdjustmentDirection))
+                return BadRequest("AdjustmentDirection chỉ nhận increase hoặc decrease.");
+
+            if (request.ToWalletId.HasValue)
+                return BadRequest("ToWalletId không được dùng khi Type là adjustment.");
+        }
+        else
+        {
+            if (!request.WalletId.HasValue)
+            {
+                if (transaction.WalletId.HasValue)
+                    return BadRequest("Giao dịch income hoặc expense bắt buộc phải có WalletId thuộc tài khoản của bạn.");
+            }
+            else
+            {
+                var ownsSourceWallet = await _db.Wallets.AnyAsync(w =>
+                    w.Id == request.WalletId.Value && w.UserId == userId);
+
+                if (!ownsSourceWallet)
+                    return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
+            }
+
+            if (request.ToWalletId.HasValue)
+                return BadRequest("ToWalletId chỉ được dùng khi Type là transfer.");
         }
 
         if (request.FamilyGroupId.HasValue)
@@ -321,6 +376,7 @@ public class TransactionsController : ControllerBase
 
         var oldGroupId = transaction.FamilyGroupId;
         var oldOccurredAtUtc = transaction.OccurredAtUtc;
+        var oldType = transaction.Type;
 
         transaction.FamilyGroupId = request.FamilyGroupId;
         transaction.WalletId = request.WalletId;
@@ -328,6 +384,9 @@ public class TransactionsController : ControllerBase
             request.Type == "transfer" ? request.ToWalletId : null;
         transaction.Amount = request.Amount;
         transaction.Type = request.Type;
+        transaction.AdjustmentDirection = request.Type == "adjustment"
+            ? request.AdjustmentDirection?.Trim().ToLowerInvariant()
+            : null;
         transaction.CategoryName = request.CategoryName ?? "Khác";
         transaction.Source = request.Source ?? "";
         transaction.BankName = request.BankName ?? "";
@@ -340,7 +399,7 @@ public class TransactionsController : ControllerBase
 
         var affectedMonths = new HashSet<(int GroupId, int Year, int Month)>();
 
-        if (oldGroupId.HasValue)
+        if (oldType != "adjustment" && oldGroupId.HasValue)
         {
             affectedMonths.Add((
                 oldGroupId.Value,
@@ -348,7 +407,7 @@ public class TransactionsController : ControllerBase
                 oldOccurredAtUtc.Month));
         }
 
-        if (transaction.FamilyGroupId.HasValue)
+        if (transaction.Type != "adjustment" && transaction.FamilyGroupId.HasValue)
         {
             affectedMonths.Add((
                 transaction.FamilyGroupId.Value,
@@ -393,7 +452,7 @@ public class TransactionsController : ControllerBase
         _db.FamilyTransactions.Remove(transaction);
         await _db.SaveChangesAsync();
 
-        if (transaction.FamilyGroupId.HasValue)
+        if (transaction.Type != "adjustment" && transaction.FamilyGroupId.HasValue)
         {
             try
             {
@@ -412,6 +471,26 @@ public class TransactionsController : ControllerBase
 
         return NoContent();
     }
+
+    private static bool IsValidOccurredAtUtc(DateTime occurredAtUtc)
+    {
+        var utcValue = occurredAtUtc.Kind == DateTimeKind.Utc
+            ? occurredAtUtc
+            : occurredAtUtc.ToUniversalTime();
+
+        var minimum = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var maximum = DateTime.UtcNow.AddDays(1);
+        return utcValue >= minimum && utcValue <= maximum;
+    }
+
+    private static bool IsValidAdjustmentDirection(string? direction)
+    {
+        if (string.IsNullOrWhiteSpace(direction))
+            return false;
+
+        var normalized = direction.Trim().ToLowerInvariant();
+        return normalized == "increase" || normalized == "decrease";
+    }
 }
 
 public class TransactionRequest
@@ -419,6 +498,10 @@ public class TransactionRequest
     public string? EventId { get; set; }
     public long Amount { get; set; }
     public string Type { get; set; } = "expense";
+    /// <summary>
+    /// Hướng điều chỉnh số dư. Chỉ dùng khi type = adjustment; nhận increase hoặc decrease.
+    /// </summary>
+    public string? AdjustmentDirection { get; set; }
     public string? CategoryName { get; set; }
     public string? Source { get; set; }
     public string? BankName { get; set; }

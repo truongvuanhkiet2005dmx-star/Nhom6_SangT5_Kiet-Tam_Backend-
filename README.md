@@ -73,3 +73,25 @@ Không sửa hoặc xóa migration đã áp dụng.
 `POST /api/wallets` nhận `name`, `type` và `initialBalance`. `type` chỉ nhận `cash`, `bank` hoặc `ewallet`.
 
 `PUT /api/wallets/{id}` nhận cùng các trường `name`, `type`, `initialBalance`; Flutter không được gửi `currentBalance` vào `initialBalance`. Nếu update không cần thay đổi số dư ban đầu, có thể bỏ `initialBalance`; API vẫn giữ `initialBalance` hiện tại.
+
+## Điều chỉnh số dư ví
+
+Điều chỉnh số dư được lưu qua giao dịch:
+
+- `POST /api/transactions`
+- `PUT /api/transactions/{id}`
+- `DELETE /api/transactions/{id}`
+
+Giao dịch điều chỉnh dùng:
+
+```json
+{
+  "eventId": "uuid-hoac-key-dong-bo-on-dinh",
+  "amount": 500000,
+  "type": "adjustment",
+  "adjustmentDirection": "increase",
+  "walletId": 1
+}
+```
+
+`amount` phải lớn hơn 0. `adjustmentDirection` chỉ nhận `increase` hoặc `decrease`. Điều chỉnh chỉ cập nhật ví được xác định bởi `walletId`; không tính vào income, expense, breakdown báo cáo hoặc cảnh báo ngân sách. `eventId` vẫn được áp dụng idempotency giống các loại giao dịch khác.
