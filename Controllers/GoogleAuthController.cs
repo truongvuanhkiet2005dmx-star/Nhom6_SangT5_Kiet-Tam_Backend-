@@ -1,6 +1,7 @@
 using FirebaseAdmin.Auth;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using SmartMoney.Api.Models;
 using SmartMoney.Api.Services;
 
@@ -25,6 +26,7 @@ public class GoogleAuthController : ControllerBase
     }
 
     [HttpPost("google")]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> GoogleLogin(
         [FromBody] GoogleLoginRequest request)
     {
@@ -86,22 +88,19 @@ public class GoogleAuthController : ControllerBase
 
             if (!createResult.Succeeded)
             {
-                user = await _userManager.FindByEmailAsync(email);
-                if (user == null)
+                return Conflict(new
                 {
-                    return Conflict(new
-                    {
-                        message = "Không tạo được tài khoản.",
-                        errors = createResult.Errors.Select(e => e.Description)
-                    });
-                }
-
-                if (!user.EmailConfirmed)
-                {
-                    user.EmailConfirmed = true;
-                    await _userManager.UpdateAsync(user);
-                }
+                    message = "Không thể tạo tài khoản Google hoặc email đã được đăng ký đồng thời. Không tự động liên kết tài khoản.",
+                    errors = createResult.Errors.Select(e => e.Description)
+                });
             }
+        else
+        {
+            return Conflict(new
+            {
+                message = "Email này đã tồn tại. Liên kết tài khoản Google bằng mật khẩu chưa được hỗ trợ trong phiên bản này."
+            });
+        }
         }
 
         return Ok(await _jwtTokens.CreateResponseAsync(user));

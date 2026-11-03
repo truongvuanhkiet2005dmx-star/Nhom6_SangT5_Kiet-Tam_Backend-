@@ -32,7 +32,9 @@ public class TransactionsController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] int? year,
-        [FromQuery] int? month)
+        [FromQuery] int? month,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 100)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (string.IsNullOrEmpty(userId))
@@ -50,14 +52,52 @@ public class TransactionsController : ControllerBase
                 (t.FamilyGroupId.HasValue &&
                  familyIds.Contains(t.FamilyGroupId.Value)));
 
-        if (year.HasValue)
-            query = query.Where(t => t.OccurredAtUtc.Year == year.Value);
+        if (year.HasValue && (year.Value < 2000 || year.Value > 2100))
+            return BadRequest("Năm phải nằm trong khoảng từ 2000 đến 2100.");
+        if (month.HasValue && (month.Value < 1 || month.Value > 12))
+            return BadRequest("Tháng phải nằm trong khoảng từ 1 đến 12.");
 
-        if (month.HasValue)
-            query = query.Where(t => t.OccurredAtUtc.Month == month.Value);
+        if (year.HasValue && month.HasValue)
+        {
+            var (start, end) = VietnamTime.GetMonthUtcRange(year.Value, month.Value);
+            query = query.Where(t => t.OccurredAtUtc >= start && t.OccurredAtUtc < end);
+        }
+        else if (year.HasValue)
+        {
+            var startYear = new DateTime(year.Value, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var endYear = startYear.AddYears(1);
+            query = query.Where(t => t.OccurredAtUtc >= startYear && t.OccurredAtUtc < endYear);
+        }
+        else if (month.HasValue)
+        {
+            var currentYear = DateTime.UtcNow.Year;
+            var (start, end) = VietnamTime.GetMonthUtcRange(currentYear, month.Value);
+            query = query.Where(t => t.OccurredAtUtc >= start && t.OccurredAtUtc < end);
+        }
+        if (page < 1 || pageSize < 1 || pageSize > 500)
+            return BadRequest("Page phải từ 1 và PageSize từ 1 đến 500.");
 
         var transactions = await query
             .OrderByDescending(t => t.OccurredAtUtc)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(t => new TransactionResponse
+            {
+                Id = t.Id,
+                EventId = t.EventId,
+                FamilyGroupId = t.FamilyGroupId,
+                WalletId = t.WalletId,
+                ToWalletId = t.ToWalletId,
+                Amount = t.Amount,
+                Type = t.Type,
+                AdjustmentDirection = t.AdjustmentDirection,
+                CategoryName = t.CategoryName,
+                Source = t.Source,
+                BankName = t.BankName,
+                PackageName = t.PackageName,
+                OccurredAtUtc = t.OccurredAtUtc,
+                Note = t.Note
+            })
             .ToListAsync();
 
         return Ok(transactions);
@@ -80,6 +120,16 @@ public class TransactionsController : ControllerBase
         if (request.OccurredAtUtc.HasValue &&
             !IsValidOccurredAtUtc(request.OccurredAtUtc.Value))
             return BadRequest("OccurredAtUtc phải từ năm 2000 và không được quá xa trong tương lai.");
+        if (!string.IsNullOrWhiteSpace(request.CategoryName) && request.CategoryName.Trim().Length > 100)
+            return BadRequest("CategoryName không được vượt quá 100 ký tự.");
+        if (!string.IsNullOrWhiteSpace(request.Source) && request.Source.Trim().Length > 100)
+            return BadRequest("Source không được vượt quá 100 ký tự.");
+        if (!string.IsNullOrWhiteSpace(request.BankName) && request.BankName.Trim().Length > 100)
+            return BadRequest("BankName không được vượt quá 100 ký tự.");
+        if (!string.IsNullOrWhiteSpace(request.PackageName) && request.PackageName.Trim().Length > 100)
+            return BadRequest("PackageName không được vượt quá 100 ký tự.");
+        if (!string.IsNullOrWhiteSpace(request.Note) && request.Note.Trim().Length > 1000)
+            return BadRequest("Note không được vượt quá 1000 ký tự.");
 
         if (request.Type != "income" &&
             request.Type != "expense" &&
@@ -94,6 +144,8 @@ public class TransactionsController : ControllerBase
                 Title = "EventId bắt buộc",
                 Detail = "EventId là khóa đồng bộ ổn định; vui lòng gửi cùng EventId khi retry."
             });
+        if (request.EventId.Trim().Length > 128)
+            return BadRequest("EventId không được vượt quá 128 ký tự.");
 
         if (request.Type == "transfer")
         {
@@ -185,7 +237,9 @@ public class TransactionsController : ControllerBase
             Source = request.Source ?? "",
             BankName = request.BankName ?? "",
             PackageName = request.PackageName ?? "",
-            OccurredAtUtc = request.OccurredAtUtc ?? DateTime.UtcNow,
+            OccurredAtUtc = request.OccurredAtUtc.HasValue
+                ? VietnamTime.NormalizeUtc(request.OccurredAtUtc.Value)
+                : DateTime.UtcNow,
             Note = request.Note ?? ""
         };
 
@@ -268,7 +322,7 @@ public class TransactionsController : ControllerBase
         }
 
         return !request.OccurredAtUtc.HasValue ||
-               transaction.OccurredAtUtc == request.OccurredAtUtc.Value.ToUniversalTime();
+               transaction.OccurredAtUtc == VietnamTime.NormalizeUtc(request.OccurredAtUtc.Value);
     }
 
     // Sửa giao dịch của chính mình
@@ -295,6 +349,10 @@ public class TransactionsController : ControllerBase
         if (request.OccurredAtUtc.HasValue &&
             !IsValidOccurredAtUtc(request.OccurredAtUtc.Value))
             return BadRequest("OccurredAtUtc phải từ năm 2000 và không được quá xa trong tương lai.");
+        if (!string.IsNullOrWhiteSpace(request.CategoryName) && request.CategoryName.Trim().Length > 100)
+            return BadRequest("CategoryName không được vượt quá 100 ký tự.");
+        if (!string.IsNullOrWhiteSpace(request.Note) && request.Note.Trim().Length > 1000)
+            return BadRequest("Note không được vượt quá 1000 ký tự.");
 
         if (request.Type != "income" &&
             request.Type != "expense" &&
@@ -312,6 +370,8 @@ public class TransactionsController : ControllerBase
                 Detail = "EventId là khóa đồng bộ; API bỏ qua hoặc thay đổi EventId sẽ không được xử lý."
             });
         }
+        if (!string.IsNullOrWhiteSpace(request.EventId) && request.EventId.Trim().Length > 128)
+            return BadRequest("EventId không được vượt quá 128 ký tự.");
 
         if (request.Type == "transfer")
         {
@@ -392,7 +452,9 @@ public class TransactionsController : ControllerBase
         transaction.BankName = request.BankName ?? "";
         transaction.PackageName = request.PackageName ?? "";
         transaction.OccurredAtUtc =
-            request.OccurredAtUtc ?? transaction.OccurredAtUtc;
+            request.OccurredAtUtc.HasValue
+                ? VietnamTime.NormalizeUtc(request.OccurredAtUtc.Value)
+                : transaction.OccurredAtUtc;
         transaction.Note = request.Note ?? "";
 
         await _db.SaveChangesAsync();
@@ -472,11 +534,9 @@ public class TransactionsController : ControllerBase
         return NoContent();
     }
 
-    private static bool IsValidOccurredAtUtc(DateTime occurredAtUtc)
+    private static bool IsValidOccurredAtUtc(DateTimeOffset occurredAtUtc)
     {
-        var utcValue = occurredAtUtc.Kind == DateTimeKind.Utc
-            ? occurredAtUtc
-            : occurredAtUtc.ToUniversalTime();
+        var utcValue = VietnamTime.NormalizeUtc(occurredAtUtc);
 
         var minimum = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var maximum = DateTime.UtcNow.AddDays(1);
@@ -506,9 +566,27 @@ public class TransactionRequest
     public string? Source { get; set; }
     public string? BankName { get; set; }
     public string? PackageName { get; set; }
-    public DateTime? OccurredAtUtc { get; set; }
+    public DateTimeOffset? OccurredAtUtc { get; set; }
     public string? Note { get; set; }
     public int? FamilyGroupId { get; set; }
     public int? WalletId { get; set; }
     public int? ToWalletId { get; set; }
+}
+
+public class TransactionResponse
+{
+    public int Id { get; set; }
+    public string EventId { get; set; } = "";
+    public int? FamilyGroupId { get; set; }
+    public int? WalletId { get; set; }
+    public int? ToWalletId { get; set; }
+    public long Amount { get; set; }
+    public string Type { get; set; } = "";
+    public string? AdjustmentDirection { get; set; }
+    public string CategoryName { get; set; } = "";
+    public string Source { get; set; } = "";
+    public string BankName { get; set; } = "";
+    public string PackageName { get; set; } = "";
+    public DateTime OccurredAtUtc { get; set; }
+    public string Note { get; set; } = "";
 }

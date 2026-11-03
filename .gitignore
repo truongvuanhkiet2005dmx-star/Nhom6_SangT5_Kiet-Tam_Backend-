@@ -9,6 +9,7 @@ obj/
 
 # Local configuration and secrets
 appsettings*.json
+!appsettings.Example.json
 serviceAccountKey.json
 
 # Local databases

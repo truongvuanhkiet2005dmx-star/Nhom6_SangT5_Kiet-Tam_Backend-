@@ -1,6 +1,6 @@
 @Backend_Nhom6_Kiet_Tam_App_QuanLyChiTieu_HostAddress = http://localhost:5087
 
-GET {{Backend_Nhom6_Kiet_Tam_App_QuanLyChiTieu_HostAddress}}/weatherforecast/
+GET {{Backend_Nhom6_Kiet_Tam_App_QuanLyChiTieu_HostAddress}}/api/health
 Accept: application/json
 
 ###

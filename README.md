@@ -53,16 +53,19 @@ Không dùng `AllowAnyOrigin` với credentials. Swagger mặc định chỉ b�
 
 ## EF Core migrations
 
-Sau khi kéo schema mới có cột ví đích chuyển khoản, chạy:
+Các migration liên quan hiện có: `AddAdjustmentDirection` cho điều chỉnh số dư ví và `AddWalletClientIdAndTokenOwnership` cho `clientId` idempotency cùng ownership duy nhất của FCM token. Chỉ Development mới tự chạy migration khi khởi động. Production phải chạy migration bằng pipeline hoặc:
 
 ```powershell
-dotnet ef migrations add AddTransferWallet
-dotnet ef database update
+dotnet ef database update --project Backend_Nhom6_Kiet&Tam_App_QuanLyChiTieu.csproj
 ```
 
-Migration hiện tại được tạo với tên `20261103165931_AddTransferWallet`; khi áp dụng local dùng `dotnet ef database update`.
+Không tự áp dụng migration vào database local; không sửa migration cũ.
 
-Không sửa hoặc xóa migration đã áp dụng.
+## Health và local configuration
+
+`GET /api/health` trả trạng thái API và không yêu cầu xác thực. Dùng `appsettings.Example.json` làm mẫu, tạo `appsettings.Development.json` hoặc User Secrets cho cấu hình local. Không commit `appsettings.Development.json`, service account hoặc database.
+
+Flutter dùng `GET /api/transactions?year=2026&month=11&page=1&pageSize=100` để phân trang; mặc dù có phân trang, response vẫn là JSON array để giữ tương thích hiện tại. DTO không trả `UserId`.
 
 ## Báo cáo tháng
 

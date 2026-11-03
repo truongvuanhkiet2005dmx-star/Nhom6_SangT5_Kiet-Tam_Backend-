@@ -40,6 +40,9 @@ public class AppDbContext
 
         builder.Entity<Wallet>()
             .HasIndex(w => w.UserId);
+        builder.Entity<Wallet>()
+            .HasIndex(w => new { w.UserId, w.ClientId })
+            .IsUnique();
 
         builder.Entity<FamilyTransaction>()
             .HasIndex(t => new { t.UserId, t.EventId })
@@ -75,6 +78,9 @@ public class AppDbContext
 
         builder.Entity<DeviceToken>()
             .HasIndex(d => new { d.UserId, d.Token })
+            .IsUnique();
+        builder.Entity<DeviceToken>()
+            .HasIndex(d => d.Token)
             .IsUnique();
     }
 }

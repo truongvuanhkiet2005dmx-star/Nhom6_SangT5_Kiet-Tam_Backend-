@@ -13,6 +13,10 @@ public class PushNotificationService
 
     public bool IsConfigured => _messaging != null;
 
+    public static bool IsUnregistered(Exception exception)
+        => exception is FirebaseMessagingException firebaseException &&
+           firebaseException.MessagingErrorCode == MessagingErrorCode.Unregistered;
+
     public async Task<string?> SendAsync(
         string token,
         string title,

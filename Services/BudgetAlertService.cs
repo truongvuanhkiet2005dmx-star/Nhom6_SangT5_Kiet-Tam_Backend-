@@ -54,8 +54,7 @@ public class BudgetAlertService
         if (budget == null || budget.MonthlyLimit <= 0)
             return;
 
-        var start = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var end = start.AddMonths(1);
+        var (start, end) = VietnamTime.GetMonthUtcRange(year, month);
         var spent = await _db.FamilyTransactions
             .Where(t =>
                 t.FamilyGroupId == familyGroupId &&
@@ -155,8 +154,14 @@ public class BudgetAlertService
                 await _push.SendAsync(token, title, body);
                 sent++;
             }
-            catch
+            catch (Exception exception)
             {
+                if (PushNotificationService.IsUnregistered(exception))
+                {
+                    var expired = await _db.DeviceTokens.Where(d => d.Token == token).ToListAsync();
+                    _db.DeviceTokens.RemoveRange(expired);
+                    await _db.SaveChangesAsync();
+                }
                 // Không đánh dấu đã gửi nếu Firebase trả lỗi.
             }
         }

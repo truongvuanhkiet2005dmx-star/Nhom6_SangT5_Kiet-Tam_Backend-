@@ -2,6 +2,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using SmartMoney.Api.Models;
 using SmartMoney.Api.Services;
 
@@ -23,19 +24,22 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("register")]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> Register(RegisterRequest request)
     {
-        var email = request.Email.Trim().ToLowerInvariant();
+        var email = request.Email?.Trim().ToLowerInvariant() ?? "";
         var displayName = request.DisplayName?.Trim() ?? "";
 
         if (string.IsNullOrWhiteSpace(displayName))
             return BadRequest("Tên hiển thị không được để trống.");
+        if (displayName.Length > 100)
+            return BadRequest("Tên hiển thị không được vượt quá 100 ký tự.");
 
         var user = new ApplicationUser
         {
             UserName = email,
             Email = email,
-            EmailConfirmed = true,
+            EmailConfirmed = false,
             DisplayName = displayName
         };
 
@@ -43,9 +47,11 @@ public class AuthController : ControllerBase
 
         if (!result.Succeeded)
         {
+            var errors = result.Errors.Select(x => x.Description).ToList();
             return BadRequest(new
             {
-                errors = result.Errors.Select(x => x.Description)
+                message = "Đăng ký thất bại. " + string.Join(" ", errors),
+                errors
             });
         }
 
@@ -53,16 +59,32 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("login")]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> Login(LoginRequest request)
     {
         var email = request.Email.Trim().ToLowerInvariant();
         var user = await _users.FindByEmailAsync(email);
 
-        if (user is null ||
-            !await _users.CheckPasswordAsync(user, request.Password))
+        if (user is null)
         {
             return Unauthorized(new { message = "Email hoặc mật khẩu không đúng." });
         }
+
+        if (await _users.IsLockedOutAsync(user))
+        {
+            return StatusCode(StatusCodes.Status423Locked, new
+            {
+                message = "Tài khoản tạm thời bị khóa do nhập sai mật khẩu nhiều lần."
+            });
+        }
+
+        if (!await _users.CheckPasswordAsync(user, request.Password))
+        {
+            await _users.AccessFailedAsync(user);
+            return Unauthorized(new { message = "Email hoặc mật khẩu không đúng." });
+        }
+
+        await _users.ResetAccessFailedCountAsync(user);
 
         return Ok(await CreateResponse(user));
     }

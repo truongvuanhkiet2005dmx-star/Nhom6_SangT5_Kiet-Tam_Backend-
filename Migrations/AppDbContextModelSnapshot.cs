@@ -232,6 +232,9 @@ namespace Backend_Nhom6_Kiet_Tam_App_QuanLyChiTieu.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Token")
+                        .IsUnique();
+
                     b.HasIndex("UserId", "Token")
                         .IsUnique();
 
@@ -413,6 +416,9 @@ namespace Backend_Nhom6_Kiet_Tam_App_QuanLyChiTieu.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("ClientId")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TEXT");
 
@@ -434,6 +440,9 @@ namespace Backend_Nhom6_Kiet_Tam_App_QuanLyChiTieu.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("UserId");
+
+                    b.HasIndex("UserId", "ClientId")
+                        .IsUnique();
 
                     b.ToTable("Wallets");
                 });

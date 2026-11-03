@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.RateLimiting;
 using SmartMoney.Api.Data;
 using SmartMoney.Api.Models;
 
@@ -65,6 +66,10 @@ public class FamiliesController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest("Tên nhóm không được để trống.");
+        if (request.Name.Trim().Length > 100)
+            return BadRequest("Tên nhóm không được vượt quá 100 ký tự.");
+        if (!string.IsNullOrWhiteSpace(request.DisplayName) && request.DisplayName.Trim().Length > 100)
+            return BadRequest("Tên hiển thị không được vượt quá 100 ký tự.");
 
         var family = new FamilyGroup
         {
@@ -114,6 +119,7 @@ public class FamiliesController : ControllerBase
 
     // Tham gia nhóm bằng mã mời
     [HttpPost("join")]
+    [EnableRateLimiting("join")]
     public async Task<IActionResult> Join([FromBody] JoinFamilyRequest request)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -130,6 +136,10 @@ public class FamiliesController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(inviteCode))
             return BadRequest("Bạn cần nhập mã mời.");
+        if (!string.IsNullOrWhiteSpace(request.DisplayName) && request.DisplayName.Trim().Length > 100)
+            return BadRequest("Tên hiển thị không được vượt quá 100 ký tự.");
+        if (!string.IsNullOrWhiteSpace(request.Relationship) && request.Relationship.Trim().Length > 50)
+            return BadRequest("Quan hệ không được vượt quá 50 ký tự.");
 
         var family = await _db.FamilyGroups
             .FirstOrDefaultAsync(g => g.InviteCode == inviteCode);

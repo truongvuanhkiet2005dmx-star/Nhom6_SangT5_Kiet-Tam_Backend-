@@ -37,6 +37,16 @@ public class DeviceTokensController : ControllerBase
             return BadRequest("Token không được để trống.");
 
         var token = request.Token.Trim();
+        if (token.Length > 4096)
+            return BadRequest("Token thiết bị không được vượt quá 4096 ký tự.");
+        if (token.Length > 4096)
+            return BadRequest("Token thiết bị không được vượt quá 4096 ký tự.");
+
+        var otherAssignments = await _db.DeviceTokens
+            .Where(d => d.Token == token && d.UserId != userId)
+            .ToListAsync();
+        if (otherAssignments.Count > 0)
+            _db.DeviceTokens.RemoveRange(otherAssignments);
 
         var deviceToken = await _db.DeviceTokens.FirstOrDefaultAsync(d =>
             d.UserId == userId && d.Token == token);
@@ -121,8 +131,16 @@ public class DeviceTokensController : ControllerBase
 
                 sentCount++;
             }
-            catch
+            catch (Exception exception)
             {
+                if (PushNotificationService.IsUnregistered(exception))
+                {
+                    var expired = await _db.DeviceTokens
+                        .Where(d => d.UserId == userId && d.Token == token)
+                        .ToListAsync();
+                    _db.DeviceTokens.RemoveRange(expired);
+                    await _db.SaveChangesAsync();
+                }
                 // Token lỗi sẽ không được tính vào số gửi thành công.
             }
         }

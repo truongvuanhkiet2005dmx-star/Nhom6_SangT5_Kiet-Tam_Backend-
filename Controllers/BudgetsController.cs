@@ -13,6 +13,9 @@ namespace SmartMoney.Api.Controllers;
 [Authorize]
 public class BudgetsController : ControllerBase
 {
+    private const long MaxMoneyValue = 1_000_000_000_000L;
+    private const int MinYear = 2000;
+    private const int MaxYear = 2100;
     private static readonly SemaphoreSlim BudgetLock = new(1, 1);
     private readonly AppDbContext _db;
     private readonly BudgetAlertService _alerts;
@@ -50,6 +53,9 @@ public class BudgetsController : ControllerBase
         var budgetYear = year ?? DateTime.UtcNow.Year;
         var budgetMonth = month ?? DateTime.UtcNow.Month;
 
+        if (budgetYear < MinYear || budgetYear > MaxYear)
+            return BadRequest("Năm phải nằm trong khoảng từ 2000 đến 2100.");
+
         if (budgetMonth < 1 || budgetMonth > 12)
             return BadRequest("Tháng phải nằm trong khoảng từ 1 đến 12.");
 
@@ -61,9 +67,7 @@ public class BudgetsController : ControllerBase
         if (budget == null)
             return NotFound("Tháng này chưa được đặt hạn mức.");
 
-        var start = new DateTime(
-            budgetYear, budgetMonth, 1, 0, 0, 0, DateTimeKind.Utc);
-        var end = start.AddMonths(1);
+        var (start, end) = VietnamTime.GetMonthUtcRange(budgetYear, budgetMonth);
 
         var spent = await _db.FamilyTransactions
             .Where(t =>
@@ -110,9 +114,13 @@ public class BudgetsController : ControllerBase
 
         if (request.Month < 1 || request.Month > 12)
             return BadRequest("Tháng phải nằm trong khoảng từ 1 đến 12.");
+        if (request.Year < MinYear || request.Year > MaxYear)
+            return BadRequest("Năm phải nằm trong khoảng từ 2000 đến 2100.");
 
         if (request.MonthlyLimit <= 0)
             return BadRequest("Hạn mức phải lớn hơn 0.");
+        if (request.MonthlyLimit > MaxMoneyValue)
+            return BadRequest("Hạn mức không được vượt quá 1.000.000.000.000 VND.");
 
         var member = await _db.FamilyMembers.FirstOrDefaultAsync(m =>
             m.UserId == userId &&

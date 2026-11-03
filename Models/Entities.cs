@@ -36,6 +36,7 @@ public class Wallet
     public string Name { get; set; } = "";
     public string Type { get; set; } = "cash";
     public long InitialBalance { get; set; }
+    public string? ClientId { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 

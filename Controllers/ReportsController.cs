@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SmartMoney.Api.Data;
+using SmartMoney.Api.Services;
 
 namespace SmartMoney.Api.Controllers;
 
@@ -39,9 +40,7 @@ public class ReportsController : ControllerBase
         if (reportMonth < 1 || reportMonth > 12)
             return BadRequest("Tháng phải nằm trong khoảng từ 1 đến 12.");
 
-        var start = new DateTime(
-            reportYear, reportMonth, 1, 0, 0, 0, DateTimeKind.Utc);
-        var end = start.AddMonths(1);
+        var (start, end) = VietnamTime.GetMonthUtcRange(reportYear, reportMonth);
 
         var query = _db.FamilyTransactions
             .AsNoTracking()

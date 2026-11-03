@@ -157,9 +157,13 @@ public class WalletsController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest("Tên ví không được để trống.");
+        if (request.Name.Trim().Length > 100)
+            return BadRequest("Tên ví không được vượt quá 100 ký tự.");
 
         if (string.IsNullOrWhiteSpace(request.Type))
             return BadRequest("Type là bắt buộc khi tạo ví.");
+        if (request.Name.Trim().Length > 100)
+            return BadRequest("Tên ví không được vượt quá 100 ký tự.");
 
         var type = request.Type.Trim().ToLowerInvariant();
         if (type != "cash" && type != "bank" && type != "ewallet")
@@ -171,17 +175,57 @@ public class WalletsController : ControllerBase
         if (initialBalance > MaxMoneyValue)
             return BadRequest("Số dư ban đầu không được vượt quá 1.000.000.000.000 VND.");
 
+        var clientId = request.ClientId?.Trim();
+        if (clientId is { Length: > 128 })
+            return BadRequest("ClientId không được vượt quá 128 ký tự.");
+
+        if (!string.IsNullOrWhiteSpace(clientId))
+        {
+            var existing = await _db.Wallets
+                .AsNoTracking()
+                .FirstOrDefaultAsync(w => w.UserId == userId && w.ClientId == clientId);
+            if (existing != null)
+            {
+                if (existing.Name != request.Name.Trim() ||
+                    existing.Type != type ||
+                    existing.InitialBalance != initialBalance)
+                    return Conflict(new ProblemDetails
+                    {
+                        Status = StatusCodes.Status409Conflict,
+                        Title = "ClientId trùng nhưng dữ liệu ví khác",
+                        Detail = "ClientId đã được đồng bộ với một ví có dữ liệu khác."
+                    });
+                return Ok(existing);
+            }
+        }
+
         var wallet = new Wallet
         {
             UserId = userId,
             Name = request.Name.Trim(),
             Type = type,
             InitialBalance = initialBalance,
+            ClientId = string.IsNullOrWhiteSpace(clientId) ? null : clientId,
             CreatedAtUtc = DateTime.UtcNow
         };
 
         _db.Wallets.Add(wallet);
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            _db.Entry(wallet).State = EntityState.Detached;
+            if (!string.IsNullOrWhiteSpace(clientId))
+            {
+                var concurrent = await _db.Wallets.AsNoTracking()
+                    .FirstOrDefaultAsync(w => w.UserId == userId && w.ClientId == clientId);
+                if (concurrent != null)
+                    return Ok(concurrent);
+            }
+            throw;
+        }
 
         return Ok(new
         {
@@ -190,6 +234,7 @@ public class WalletsController : ControllerBase
             wallet.Type,
             wallet.InitialBalance,
             CurrentBalance = wallet.InitialBalance,
+            wallet.ClientId,
             wallet.CreatedAtUtc
         });
     }
@@ -255,7 +300,7 @@ public class WalletsController : ControllerBase
             .AsNoTracking()
             .Where(t => t.UserId == userId &&
                         (t.WalletId == id || t.ToWalletId == id))
-            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId })
+            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId, t.AdjustmentDirection })
             .ToListAsync();
 
         var currentBalance =
@@ -271,6 +316,12 @@ public class WalletsController : ControllerBase
                 .Sum(t => t.Amount) +
             transactions
                 .Where(t => t.Type == "transfer" && t.ToWalletId == id)
+                .Sum(t => t.Amount) +
+            transactions
+                .Where(t => t.Type == "adjustment" && t.WalletId == id && t.AdjustmentDirection == "increase")
+                .Sum(t => t.Amount) -
+            transactions
+                .Where(t => t.Type == "adjustment" && t.WalletId == id && t.AdjustmentDirection == "decrease")
                 .Sum(t => t.Amount);
 
         return Ok(new
@@ -298,6 +349,18 @@ public class WalletsController : ControllerBase
         if (wallet == null)
             return NotFound("Không tìm thấy ví.");
 
+        var hasTransactions = await _db.FamilyTransactions.AnyAsync(t =>
+            t.WalletId == id || t.ToWalletId == id);
+        if (hasTransactions)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "Không thể xóa ví",
+                Detail = "Ví đang được tham chiếu bởi giao dịch. Hãy giữ ví để bảo toàn lịch sử giao dịch."
+            });
+        }
+
         _db.Wallets.Remove(wallet);
         await _db.SaveChangesAsync();
 
@@ -310,4 +373,5 @@ public class WalletRequest
     public string Name { get; set; } = "";
     public string? Type { get; set; }
     public long? InitialBalance { get; set; }
+    public string? ClientId { get; set; }
 }
