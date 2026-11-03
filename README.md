@@ -13,6 +13,18 @@ Môi trường Development dùng SQLite và JWT. Không commit các file cấu h
 
 Trên máy khác, tạo file `appsettings.Development.json` tại thư mục chứa `.csproj` bằng các khóa cấu hình trên. Dùng `Jwt:Key` riêng đủ dài cho mỗi môi trường; không ghi mật khẩu hoặc khóa thực vào Git.
 
+## Chạy HTTP cho Android Emulator
+
+Chạy profile `http` để backend dùng HTTP trên cổng 5087:
+
+```powershell
+dotnet run --launch-profile http
+```
+
+Trong Android Emulator, Flutter gọi API local bằng địa chỉ `http://10.0.2.2:5087/api`.
+
+HTTPS redirect chỉ được bật ngoài môi trường Development; profile `http` Development cần thiết cho emulator.
+
 ## Firebase
 
 Google login và FCM cần Firebase Admin service account hợp lệ.

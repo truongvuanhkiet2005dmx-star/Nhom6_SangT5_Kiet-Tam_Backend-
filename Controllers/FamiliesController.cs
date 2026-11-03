@@ -181,7 +181,7 @@ public class FamiliesController : ControllerBase
             }
 
             return Conflict(
-                "Không thể rời nhóm vì bạn là chủ nhóm. Xóa nhóm chưa được hỗ trợ.");
+                "Bạn là chủ nhóm. Hãy dùng DELETE /api/families/{familyGroupId} để xóa nhóm.");
         }
 
         _db.FamilyMembers.Remove(member);
@@ -229,6 +229,55 @@ public class FamiliesController : ControllerBase
         await _db.SaveChangesAsync();
 
         return Ok(new { message = "Đã xóa thành viên khỏi nhóm." });
+    }
+
+    // Chủ nhóm xóa nhóm gia đình; giữ lại lịch sử giao dịch bằng cách bỏ liên kết nhóm
+    [HttpDelete("{familyGroupId:int}")]
+    public async Task<IActionResult> DeleteFamily(int familyGroupId)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        var group = await _db.FamilyGroups.FirstOrDefaultAsync(g =>
+            g.Id == familyGroupId);
+
+        if (group == null)
+            return NotFound("Không tìm thấy nhóm gia đình.");
+
+        if (group.OwnerUserId != userId)
+        {
+            return StatusCode(
+                StatusCodes.Status403Forbidden,
+                new { message = "Chỉ chủ nhóm mới được xóa nhóm gia đình." });
+        }
+
+        var ownerMember = await _db.FamilyMembers.FirstOrDefaultAsync(m =>
+            m.FamilyGroupId == familyGroupId &&
+            m.UserId == userId &&
+            m.AccessRole == "Owner");
+
+        if (ownerMember == null)
+        {
+            return Conflict(
+                "Không thể xác nhận quyền chủ nhóm trong cơ sở dữ liệu.");
+        }
+
+        var transactions = await _db.FamilyTransactions
+            .Where(t => t.FamilyGroupId == familyGroupId)
+            .ToListAsync();
+
+        foreach (var transaction in transactions)
+            transaction.FamilyGroupId = null;
+
+        _db.FamilyGroups.Remove(group);
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            message = "Đã xóa nhóm gia đình. Lịch sử giao dịch được giữ lại.",
+            familyGroupId
+        });
     }
 }
 

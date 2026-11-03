@@ -93,11 +93,25 @@ public class TransactionsController : ControllerBase
                 return Forbid();
         }
 
+        var eventId = string.IsNullOrWhiteSpace(request.EventId)
+            ? Guid.NewGuid().ToString()
+            : request.EventId.Trim();
+
+        var existing = await _db.FamilyTransactions.FirstOrDefaultAsync(t =>
+            t.UserId == userId && t.EventId == eventId);
+
+        if (existing != null)
+        {
+            if (TransactionsMatch(existing, request))
+                return Ok(existing);
+
+            return Conflict(
+                "EventId đã tồn tại nhưng dữ liệu giao dịch không khớp với bản ghi trước đó.");
+        }
+
         var transaction = new FamilyTransaction
         {
-            EventId = string.IsNullOrWhiteSpace(request.EventId)
-                ? Guid.NewGuid().ToString()
-                : request.EventId.Trim(),
+            EventId = eventId,
             UserId = userId,
             FamilyGroupId = request.FamilyGroupId,
             WalletId = request.WalletId,
@@ -112,7 +126,30 @@ public class TransactionsController : ControllerBase
         };
 
         _db.FamilyTransactions.Add(transaction);
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            _db.Entry(transaction).State = EntityState.Detached;
+
+            var concurrentExisting = await _db.FamilyTransactions
+                .AsNoTracking()
+                .FirstOrDefaultAsync(t =>
+                    t.UserId == userId && t.EventId == eventId);
+
+            if (concurrentExisting != null)
+            {
+                if (TransactionsMatch(concurrentExisting, request))
+                    return Ok(concurrentExisting);
+
+                return Conflict(
+                    "EventId đã tồn tại nhưng dữ liệu giao dịch không khớp với bản ghi trước đó.");
+            }
+
+            throw;
+        }
 
         if (transaction.FamilyGroupId.HasValue)
         {
@@ -124,6 +161,30 @@ public class TransactionsController : ControllerBase
         }
 
         return Ok(transaction);
+    }
+
+    private static bool TransactionsMatch(
+        FamilyTransaction transaction,
+        TransactionRequest request)
+    {
+        if (transaction.FamilyGroupId != request.FamilyGroupId ||
+            transaction.WalletId != request.WalletId ||
+            transaction.Amount != request.Amount ||
+            !string.Equals(transaction.Type, request.Type, StringComparison.Ordinal) ||
+            !string.Equals(
+                transaction.CategoryName,
+                request.CategoryName ?? "Khác",
+                StringComparison.Ordinal) ||
+            !string.Equals(transaction.Source, request.Source ?? "", StringComparison.Ordinal) ||
+            !string.Equals(transaction.BankName, request.BankName ?? "", StringComparison.Ordinal) ||
+            !string.Equals(transaction.PackageName, request.PackageName ?? "", StringComparison.Ordinal) ||
+            !string.Equals(transaction.Note, request.Note ?? "", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return !request.OccurredAtUtc.HasValue ||
+               transaction.OccurredAtUtc == request.OccurredAtUtc.Value.ToUniversalTime();
     }
 
     // Sửa giao dịch của chính mình
