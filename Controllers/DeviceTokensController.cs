@@ -71,8 +71,13 @@ public class DeviceTokensController : ControllerBase
         if (string.IsNullOrEmpty(userId))
             return Unauthorized();
 
+        if (string.IsNullOrWhiteSpace(request.Token))
+            return BadRequest("Token không được để trống.");
+
+        var token = request.Token.Trim();
+
         var deviceToken = await _db.DeviceTokens.FirstOrDefaultAsync(d =>
-            d.UserId == userId && d.Token == request.Token);
+            d.UserId == userId && d.Token == token);
 
         if (deviceToken == null)
             return NotFound("Không tìm thấy token thiết bị.");

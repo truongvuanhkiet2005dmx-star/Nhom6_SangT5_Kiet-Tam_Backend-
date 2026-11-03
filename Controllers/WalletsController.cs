@@ -137,7 +137,8 @@ public class WalletsController : ControllerBase
         if (type != "cash" && type != "bank" && type != "ewallet")
             return BadRequest("Type chỉ nhận cash, bank hoặc ewallet.");
 
-        if (request.InitialBalance < 0)
+        var initialBalance = request.InitialBalance ?? 0;
+        if (initialBalance < 0)
             return BadRequest("Số dư ban đầu không được âm.");
 
         var wallet = new Wallet
@@ -145,7 +146,7 @@ public class WalletsController : ControllerBase
             UserId = userId,
             Name = request.Name.Trim(),
             Type = type,
-            InitialBalance = request.InitialBalance,
+            InitialBalance = initialBalance,
             CreatedAtUtc = DateTime.UtcNow
         };
 
@@ -186,14 +187,19 @@ public class WalletsController : ControllerBase
         if (type != "cash" && type != "bank" && type != "ewallet")
             return BadRequest("Type chỉ nhận cash, bank hoặc ewallet.");
 
-        if (request.InitialBalance < 0)
+        var initialBalanceWasSupplied = request.InitialBalance.HasValue;
+        var initialBalance = request.InitialBalance ?? wallet.InitialBalance;
+
+        if (initialBalance < 0)
             return BadRequest("Số dư ban đầu không được âm.");
 
         var hasTransactions = await _db.FamilyTransactions.AnyAsync(t =>
             t.UserId == userId &&
             (t.WalletId == id || t.ToWalletId == id));
 
-        if (hasTransactions && wallet.InitialBalance != request.InitialBalance)
+        if (hasTransactions &&
+            initialBalanceWasSupplied &&
+            wallet.InitialBalance != initialBalance)
         {
             return BadRequest(
                 "Không thể thay đổi số dư ban đầu sau khi ví đã có giao dịch. Hãy tạo giao dịch điều chỉnh số dư.");
@@ -201,10 +207,42 @@ public class WalletsController : ControllerBase
 
         wallet.Name = request.Name.Trim();
         wallet.Type = type;
-        wallet.InitialBalance = request.InitialBalance;
+        if (initialBalanceWasSupplied)
+            wallet.InitialBalance = initialBalance;
 
         await _db.SaveChangesAsync();
-        return Ok(wallet);
+
+        var transactions = await _db.FamilyTransactions
+            .AsNoTracking()
+            .Where(t => t.UserId == userId &&
+                        (t.WalletId == id || t.ToWalletId == id))
+            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId })
+            .ToListAsync();
+
+        var currentBalance =
+            wallet.InitialBalance +
+            transactions
+                .Where(t => t.Type == "income" && t.WalletId == id)
+                .Sum(t => t.Amount) -
+            transactions
+                .Where(t => t.Type == "expense" && t.WalletId == id)
+                .Sum(t => t.Amount) -
+            transactions
+                .Where(t => t.Type == "transfer" && t.WalletId == id)
+                .Sum(t => t.Amount) +
+            transactions
+                .Where(t => t.Type == "transfer" && t.ToWalletId == id)
+                .Sum(t => t.Amount);
+
+        return Ok(new
+        {
+            wallet.Id,
+            wallet.Name,
+            wallet.Type,
+            wallet.InitialBalance,
+            CurrentBalance = currentBalance,
+            wallet.CreatedAtUtc
+        });
     }
 
     // Xóa ví; giao dịch cũ vẫn được giữ lại
@@ -232,5 +270,5 @@ public class WalletRequest
 {
     public string Name { get; set; } = "";
     public string Type { get; set; } = "cash";
-    public long InitialBalance { get; set; }
+    public long? InitialBalance { get; set; }
 }

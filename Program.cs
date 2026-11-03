@@ -24,6 +24,12 @@ var allowedOrigins = builder.Configuration
     .GetSection("Cors:AllowedOrigins")
     .Get<string[]>() ?? Array.Empty<string>();
 
+allowedOrigins = allowedOrigins
+    .Where(origin => !string.IsNullOrWhiteSpace(origin))
+    .Select(origin => origin.Trim())
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
+
 if (builder.Environment.IsDevelopment() && allowedOrigins.Length == 0)
 {
     allowedOrigins =
@@ -32,6 +38,12 @@ if (builder.Environment.IsDevelopment() && allowedOrigins.Length == 0)
         "http://localhost:5087",
         "https://localhost:7076"
     ];
+}
+
+if (!builder.Environment.IsDevelopment() && allowedOrigins.Length == 0)
+{
+    Console.Error.WriteLine(
+        "Cảnh báo: Cors:AllowedOrigins chưa được cấu hình trong Production; Flutter Web bị chặn bởi CORS.");
 }
 
 builder.Services.AddCors(options =>

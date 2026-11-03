@@ -66,4 +66,10 @@ Không sửa hoặc xóa migration đã áp dụng.
 
 ## Báo cáo tháng
 
-`GET /api/reports/monthly` trả trường `breakdown` gồm các mục có `categoryName`, `type` và `amount`. Trường thống nhất cho giá trị phân loại là `amount`; transfer không được tính là income hoặc expense.
+`GET /api/reports/monthly` trả `breakdown` gồm hai mảng rõ ràng: `breakdown.income` và `breakdown.expense`. Mỗi mục có `categoryName` và `amount`; trường thống nhất cho giá trị phân loại là `amount`. Transfer không được tính là income hoặc expense.
+
+## Contract ví
+
+`POST /api/wallets` nhận `name`, `type` và `initialBalance`. `type` chỉ nhận `cash`, `bank` hoặc `ewallet`.
+
+`PUT /api/wallets/{id}` nhận cùng các trường `name`, `type`, `initialBalance`; Flutter không được gửi `currentBalance` vào `initialBalance`. Nếu update không cần thay đổi số dư ban đầu, có thể bỏ `initialBalance`; API vẫn giữ `initialBalance` hiện tại.

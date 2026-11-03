@@ -68,6 +68,7 @@ public class GoogleAuthController : ControllerBase
             return Unauthorized("Email của tài khoản Google chưa được xác minh.");
 
         var user = await _userManager.FindByEmailAsync(email);
+        var normalizedDisplayName = displayName?.Trim() ?? "";
 
         if (user == null)
         {
@@ -76,9 +77,9 @@ public class GoogleAuthController : ControllerBase
                 UserName = email,
                 Email = email,
                 EmailConfirmed = true,
-                DisplayName = string.IsNullOrWhiteSpace(displayName)
+                DisplayName = string.IsNullOrWhiteSpace(normalizedDisplayName)
                     ? email
-                    : displayName
+                    : normalizedDisplayName
             };
 
             var createResult = await _userManager.CreateAsync(user);

@@ -8,13 +8,16 @@ public class BudgetAlertService
     private static readonly SemaphoreSlim EvaluationLock = new(1, 1);
     private readonly AppDbContext _db;
     private readonly PushNotificationService _push;
+    private readonly ILogger<BudgetAlertService> _logger;
 
     public BudgetAlertService(
         AppDbContext db,
-        PushNotificationService push)
+        PushNotificationService push,
+        ILogger<BudgetAlertService> logger)
     {
         _db = db;
         _push = push;
+        _logger = logger;
     }
 
     public async Task EvaluateAsync(int familyGroupId, int year, int month)
@@ -23,6 +26,17 @@ public class BudgetAlertService
         try
         {
             await EvaluateLockedAsync(familyGroupId, year, month);
+        }
+        catch (Exception exception)
+        {
+            // The budget/transaction write has already committed; an alert failure must not
+            // turn a successful API call into a 500 response.
+            _logger.LogWarning(
+                exception,
+                "Không thể đánh giá cảnh báo ngân sách cho nhóm {FamilyGroupId}, tháng {Month}/{Year}.",
+                familyGroupId,
+                month,
+                year);
         }
         finally
         {

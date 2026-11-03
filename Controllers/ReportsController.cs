@@ -44,7 +44,8 @@ public class ReportsController : ControllerBase
             .AsNoTracking()
             .Where(t =>
                 t.OccurredAtUtc >= start &&
-                t.OccurredAtUtc < end);
+                t.OccurredAtUtc < end &&
+                t.Type != "transfer");
 
         if (familyGroupId.HasValue)
         {
@@ -92,6 +93,26 @@ public class ReportsController : ControllerBase
             .OrderByDescending(item => item.amount)
             .ToList();
 
+        var breakdown = new
+        {
+            income = categories
+                .Where(item => item.type == "income")
+                .Select(item => new
+                {
+                    categoryName = item.categoryName,
+                    amount = item.amount
+                })
+                .ToList(),
+            expense = categories
+                .Where(item => item.type == "expense")
+                .Select(item => new
+                {
+                    categoryName = item.categoryName,
+                    amount = item.amount
+                })
+                .ToList()
+        };
+
         var daily = transactions
             .GroupBy(t => t.OccurredAtUtc.Date)
             .Select(group => new
@@ -117,12 +138,7 @@ public class ReportsController : ControllerBase
             netAmount = totalIncome - totalExpense,
             transactionCount = transactions.Count,
             categories,
-            breakdown = categories.Select(item => new
-            {
-                categoryName = item.categoryName,
-                type = item.type,
-                amount = item.amount
-            }),
+            breakdown,
             daily
         });
     }

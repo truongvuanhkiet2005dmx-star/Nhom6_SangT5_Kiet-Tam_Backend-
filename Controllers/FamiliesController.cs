@@ -152,7 +152,25 @@ public class FamiliesController : ControllerBase
         };
 
         _db.FamilyMembers.Add(member);
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            _db.Entry(member).State = EntityState.Detached;
+
+            var concurrentMembership = await _db.FamilyMembers
+                .AsNoTracking()
+                .FirstOrDefaultAsync(m => m.UserId == userId);
+
+            if (concurrentMembership != null)
+            {
+                return Conflict("Tài khoản này đã thuộc một nhóm gia đình.");
+            }
+
+            throw;
+        }
 
         return Ok(new
         {
@@ -185,7 +203,7 @@ public class FamiliesController : ControllerBase
         var memberCount = await _db.FamilyMembers.CountAsync(m =>
             m.FamilyGroupId == familyGroupId);
 
-        if (member.AccessRole == "Owner")
+        if (string.Equals(member.AccessRole, "Owner", StringComparison.OrdinalIgnoreCase))
         {
             if (memberCount > 1)
             {
@@ -225,7 +243,7 @@ public class FamiliesController : ControllerBase
         if (owner == null)
             return Forbid();
 
-        if (owner.AccessRole != "Owner")
+        if (!string.Equals(owner.AccessRole, "Owner", StringComparison.OrdinalIgnoreCase))
             return StatusCode(
                 StatusCodes.Status403Forbidden,
                 new { message = "Chỉ chủ nhóm mới được xóa thành viên." });
@@ -277,10 +295,10 @@ public class FamiliesController : ControllerBase
 
         var ownerMember = await _db.FamilyMembers.FirstOrDefaultAsync(m =>
             m.FamilyGroupId == familyGroupId &&
-            m.UserId == userId &&
-            m.AccessRole == "Owner");
+            m.UserId == userId);
 
-        if (ownerMember == null)
+        if (ownerMember == null ||
+            !string.Equals(ownerMember.AccessRole, "Owner", StringComparison.OrdinalIgnoreCase))
         {
             return Conflict(
                 "Không thể xác nhận quyền chủ nhóm trong cơ sở dữ liệu.");

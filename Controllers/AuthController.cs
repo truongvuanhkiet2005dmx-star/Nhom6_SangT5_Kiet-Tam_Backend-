@@ -26,13 +26,17 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> Register(RegisterRequest request)
     {
         var email = request.Email.Trim().ToLowerInvariant();
+        var displayName = request.DisplayName?.Trim() ?? "";
+
+        if (string.IsNullOrWhiteSpace(displayName))
+            return BadRequest("Tên hiển thị không được để trống.");
 
         var user = new ApplicationUser
         {
             UserName = email,
             Email = email,
             EmailConfirmed = true,
-            DisplayName = request.DisplayName.Trim()
+            DisplayName = displayName
         };
 
         var result = await _users.CreateAsync(user, request.Password);

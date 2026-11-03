@@ -15,13 +15,16 @@ public class TransactionsController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly BudgetAlertService _alerts;
+    private readonly ILogger<TransactionsController> _logger;
 
     public TransactionsController(
         AppDbContext db,
-        BudgetAlertService alerts)
+        BudgetAlertService alerts,
+        ILogger<TransactionsController> logger)
     {
         _db = db;
         _alerts = alerts;
+        _logger = logger;
     }
 
     // Lấy giao dịch cá nhân và giao dịch được chia sẻ trong gia đình
@@ -84,13 +87,17 @@ public class TransactionsController : ControllerBase
                 Detail = "EventId là khóa đồng bộ ổn định; vui lòng gửi cùng EventId khi retry."
             });
 
-        if (request.WalletId.HasValue)
+        if (!request.WalletId.HasValue)
         {
-            var ownsWallet = await _db.Wallets.AnyAsync(w =>
-                w.Id == request.WalletId.Value && w.UserId == userId);
+            return BadRequest("Income và expense bắt buộc phải có WalletId thuộc tài khoản của bạn.");
+        }
 
-            if (!ownsWallet)
-                return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
+        var ownsSourceWallet = await _db.Wallets.AnyAsync(w =>
+            w.Id == request.WalletId.Value && w.UserId == userId);
+
+        if (!ownsSourceWallet)
+        {
+            return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
         }
 
         if (request.Type == "transfer")
@@ -191,10 +198,19 @@ public class TransactionsController : ControllerBase
         if (transaction.FamilyGroupId.HasValue)
         {
             var occurred = transaction.OccurredAtUtc;
-            await _alerts.EvaluateAsync(
-                transaction.FamilyGroupId.Value,
-                occurred.Year,
-                occurred.Month);
+            try
+            {
+                await _alerts.EvaluateAsync(
+                    transaction.FamilyGroupId.Value,
+                    occurred.Year,
+                    occurred.Month);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Giao dịch đã được lưu nhưng cảnh báo ngân sách không thể đánh giá.");
+            }
         }
 
         return Ok(transaction);
@@ -260,13 +276,17 @@ public class TransactionsController : ControllerBase
             });
         }
 
-        if (request.WalletId.HasValue)
+        if (!request.WalletId.HasValue)
         {
-            var ownsWallet = await _db.Wallets.AnyAsync(w =>
-                w.Id == request.WalletId.Value && w.UserId == userId);
+            return BadRequest("Income và expense bắt buộc phải có WalletId thuộc tài khoản của bạn.");
+        }
 
-            if (!ownsWallet)
-                return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
+        var ownsSourceWallet = await _db.Wallets.AnyAsync(w =>
+            w.Id == request.WalletId.Value && w.UserId == userId);
+
+        if (!ownsSourceWallet)
+        {
+            return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
         }
 
         if (request.Type == "transfer")
@@ -338,10 +358,19 @@ public class TransactionsController : ControllerBase
 
         foreach (var affected in affectedMonths)
         {
-            await _alerts.EvaluateAsync(
-                affected.GroupId,
-                affected.Year,
-                affected.Month);
+            try
+            {
+                await _alerts.EvaluateAsync(
+                    affected.GroupId,
+                    affected.Year,
+                    affected.Month);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Giao dịch đã được cập nhật nhưng cảnh báo ngân sách không thể đánh giá.");
+            }
         }
 
         return Ok(transaction);
@@ -366,10 +395,19 @@ public class TransactionsController : ControllerBase
 
         if (transaction.FamilyGroupId.HasValue)
         {
-            await _alerts.EvaluateAsync(
-                transaction.FamilyGroupId.Value,
-                transaction.OccurredAtUtc.Year,
-                transaction.OccurredAtUtc.Month);
+            try
+            {
+                await _alerts.EvaluateAsync(
+                    transaction.FamilyGroupId.Value,
+                    transaction.OccurredAtUtc.Year,
+                    transaction.OccurredAtUtc.Month);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Giao dịch đã được xóa nhưng cảnh báo ngân sách không thể đánh giá.");
+            }
         }
 
         return NoContent();
