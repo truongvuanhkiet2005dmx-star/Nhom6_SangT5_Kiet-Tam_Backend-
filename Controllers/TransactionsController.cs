@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SmartMoney.Api.Data;
 using SmartMoney.Api.Models;
+using SmartMoney.Api.Services;
 
 namespace SmartMoney.Api.Controllers;
 
@@ -13,10 +14,14 @@ namespace SmartMoney.Api.Controllers;
 public class TransactionsController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly BudgetAlertService _alerts;
 
-    public TransactionsController(AppDbContext db)
+    public TransactionsController(
+        AppDbContext db,
+        BudgetAlertService alerts)
     {
         _db = db;
+        _alerts = alerts;
     }
 
     // Lấy giao dịch cá nhân và giao dịch được chia sẻ trong gia đình
@@ -109,6 +114,15 @@ public class TransactionsController : ControllerBase
         _db.FamilyTransactions.Add(transaction);
         await _db.SaveChangesAsync();
 
+        if (transaction.FamilyGroupId.HasValue)
+        {
+            var occurred = transaction.OccurredAtUtc;
+            await _alerts.EvaluateAsync(
+                transaction.FamilyGroupId.Value,
+                occurred.Year,
+                occurred.Month);
+        }
+
         return Ok(transaction);
     }
 
@@ -153,6 +167,9 @@ public class TransactionsController : ControllerBase
                 return Forbid();
         }
 
+        var oldGroupId = transaction.FamilyGroupId;
+        var oldOccurredAtUtc = transaction.OccurredAtUtc;
+
         transaction.FamilyGroupId = request.FamilyGroupId;
         transaction.WalletId = request.WalletId;
         transaction.Amount = request.Amount;
@@ -166,6 +183,33 @@ public class TransactionsController : ControllerBase
         transaction.Note = request.Note ?? "";
 
         await _db.SaveChangesAsync();
+
+        var affectedMonths = new HashSet<(int GroupId, int Year, int Month)>();
+
+        if (oldGroupId.HasValue)
+        {
+            affectedMonths.Add((
+                oldGroupId.Value,
+                oldOccurredAtUtc.Year,
+                oldOccurredAtUtc.Month));
+        }
+
+        if (transaction.FamilyGroupId.HasValue)
+        {
+            affectedMonths.Add((
+                transaction.FamilyGroupId.Value,
+                transaction.OccurredAtUtc.Year,
+                transaction.OccurredAtUtc.Month));
+        }
+
+        foreach (var affected in affectedMonths)
+        {
+            await _alerts.EvaluateAsync(
+                affected.GroupId,
+                affected.Year,
+                affected.Month);
+        }
+
         return Ok(transaction);
     }
 
@@ -185,6 +229,14 @@ public class TransactionsController : ControllerBase
 
         _db.FamilyTransactions.Remove(transaction);
         await _db.SaveChangesAsync();
+
+        if (transaction.FamilyGroupId.HasValue)
+        {
+            await _alerts.EvaluateAsync(
+                transaction.FamilyGroupId.Value,
+                transaction.OccurredAtUtc.Year,
+                transaction.OccurredAtUtc.Month);
+        }
 
         return NoContent();
     }

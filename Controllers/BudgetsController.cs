@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SmartMoney.Api.Data;
 using SmartMoney.Api.Models;
+using SmartMoney.Api.Services;
 
 namespace SmartMoney.Api.Controllers;
 
@@ -13,10 +14,14 @@ namespace SmartMoney.Api.Controllers;
 public class BudgetsController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly BudgetAlertService _alerts;
 
-    public BudgetsController(AppDbContext db)
+    public BudgetsController(
+        AppDbContext db,
+        BudgetAlertService alerts)
     {
         _db = db;
+        _alerts = alerts;
     }
 
     // Xem hạn mức và tình trạng chi tiêu
@@ -75,22 +80,6 @@ public class BudgetsController : ControllerBase
                 ? "warning80"
                 : "normal";
 
-        string? newAlert = null;
-
-        if (spent >= budget.MonthlyLimit && !budget.Exceeded100Sent)
-        {
-            newAlert = "exceeded100";
-            budget.Exceeded100Sent = true;
-            await _db.SaveChangesAsync();
-        }
-        else if (spent >= budget.MonthlyLimit * 0.8m &&
-                 !budget.Warning80Sent)
-        {
-            newAlert = "warning80";
-            budget.Warning80Sent = true;
-            await _db.SaveChangesAsync();
-        }
-
         return Ok(new
         {
             familyGroupId,
@@ -100,8 +89,7 @@ public class BudgetsController : ControllerBase
             spent,
             remaining = budget.MonthlyLimit - spent,
             percent,
-            alertLevel,
-            newAlert
+            alertLevel
         });
     }
 
@@ -154,13 +142,13 @@ public class BudgetsController : ControllerBase
         else
         {
             budget.MonthlyLimit = request.MonthlyLimit;
-
-            // Đặt hạn mức mới thì cho phép cảnh báo lại
-            budget.Warning80Sent = false;
-            budget.Exceeded100Sent = false;
         }
 
         await _db.SaveChangesAsync();
+        await _alerts.EvaluateAsync(
+            familyGroupId,
+            budget.Year,
+            budget.Month);
 
         return Ok(new
         {

@@ -148,6 +148,88 @@ public class FamiliesController : ControllerBase
             family.Name
         });
     }
+
+    // Thành viên tự rời nhóm
+    [HttpPost("{familyGroupId:int}/leave")]
+    public async Task<IActionResult> Leave(int familyGroupId)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        var group = await _db.FamilyGroups
+            .FirstOrDefaultAsync(g => g.Id == familyGroupId);
+
+        if (group == null)
+            return NotFound("Không tìm thấy nhóm gia đình.");
+
+        var member = await _db.FamilyMembers.FirstOrDefaultAsync(m =>
+            m.FamilyGroupId == familyGroupId && m.UserId == userId);
+
+        if (member == null)
+            return Forbid();
+
+        var memberCount = await _db.FamilyMembers.CountAsync(m =>
+            m.FamilyGroupId == familyGroupId);
+
+        if (member.AccessRole == "Owner")
+        {
+            if (memberCount > 1)
+            {
+                return Conflict(
+                    "Chủ nhóm không thể tự rời khi nhóm còn thành viên khác.");
+            }
+
+            return Conflict(
+                "Không thể rời nhóm vì bạn là chủ nhóm. Xóa nhóm chưa được hỗ trợ.");
+        }
+
+        _db.FamilyMembers.Remove(member);
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message = "Đã rời nhóm gia đình." });
+    }
+
+    // Chủ nhóm xóa thành viên khác
+    [HttpDelete("{familyGroupId:int}/members/{memberUserId}")]
+    public async Task<IActionResult> RemoveMember(
+        int familyGroupId,
+        string memberUserId)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        var owner = await _db.FamilyMembers.FirstOrDefaultAsync(m =>
+            m.FamilyGroupId == familyGroupId &&
+            m.UserId == userId);
+
+        if (owner == null)
+            return Forbid();
+
+        if (owner.AccessRole != "Owner")
+            return StatusCode(
+                StatusCodes.Status403Forbidden,
+                new { message = "Chỉ chủ nhóm mới được xóa thành viên." });
+
+        if (string.IsNullOrWhiteSpace(memberUserId))
+            return BadRequest("Thiếu mã thành viên cần xóa.");
+
+        if (memberUserId == userId)
+            return BadRequest("Chủ nhóm không thể tự xóa bằng API này. Hãy sử dụng chức năng rời nhóm.");
+
+        var member = await _db.FamilyMembers.FirstOrDefaultAsync(m =>
+            m.FamilyGroupId == familyGroupId &&
+            m.UserId == memberUserId);
+
+        if (member == null)
+            return NotFound("Không tìm thấy thành viên trong nhóm.");
+
+        _db.FamilyMembers.Remove(member);
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message = "Đã xóa thành viên khỏi nhóm." });
+    }
 }
 
 public class CreateFamilyRequest

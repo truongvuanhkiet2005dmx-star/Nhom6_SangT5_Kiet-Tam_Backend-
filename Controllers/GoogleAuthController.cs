@@ -1,11 +1,8 @@
-﻿using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
 using FirebaseAdmin.Auth;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
 using SmartMoney.Api.Models;
+using SmartMoney.Api.Services;
 
 namespace SmartMoney.Api.Controllers;
 
@@ -15,16 +12,16 @@ public class GoogleAuthController : ControllerBase
 {
     private readonly IServiceProvider _services;
     private readonly UserManager<ApplicationUser> _userManager;
-    private readonly IConfiguration _configuration;
+    private readonly JwtTokenService _jwtTokens;
 
     public GoogleAuthController(
         IServiceProvider services,
         UserManager<ApplicationUser> userManager,
-        IConfiguration configuration)
+        JwtTokenService jwtTokens)
     {
         _services = services;
         _userManager = userManager;
-        _configuration = configuration;
+        _jwtTokens = jwtTokens;
     }
 
     [HttpPost("google")]
@@ -55,6 +52,10 @@ public class GoogleAuthController : ControllerBase
             ? emailValue?.ToString()
             : null;
 
+        var emailVerified = decodedToken.Claims.TryGetValue("email_verified", out var verifiedValue)
+            && (verifiedValue is true ||
+                string.Equals(verifiedValue?.ToString(), "true", StringComparison.OrdinalIgnoreCase));
+
         var displayName =
             decodedToken.Claims.TryGetValue("name", out var nameValue)
                 ? nameValue?.ToString()
@@ -62,6 +63,9 @@ public class GoogleAuthController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(email))
             return Unauthorized("Tài khoản Firebase không có email.");
+
+        if (!emailVerified)
+            return Unauthorized("Email của tài khoản Google chưa được xác minh.");
 
         var user = await _userManager.FindByEmailAsync(email);
 
@@ -89,44 +93,7 @@ public class GoogleAuthController : ControllerBase
             }
         }
 
-        var key = _configuration["Jwt:Key"];
-        var issuer = _configuration["Jwt:Issuer"];
-        var audience = _configuration["Jwt:Audience"];
-
-        if (string.IsNullOrWhiteSpace(key))
-            return StatusCode(500, "Backend chưa cấu hình Jwt:Key.");
-
-        var claims = new[]
-        {
-            new Claim(ClaimTypes.NameIdentifier, user.Id),
-            new Claim(ClaimTypes.Email, user.Email ?? email),
-            new Claim(ClaimTypes.Name, user.DisplayName)
-        };
-
-        var signingKey = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes(key));
-
-        var credentials = new SigningCredentials(
-            signingKey,
-            SecurityAlgorithms.HmacSha256);
-
-        var jwt = new JwtSecurityToken(
-            issuer: issuer,
-            audience: audience,
-            claims: claims,
-            expires: DateTime.UtcNow.AddHours(2),
-            signingCredentials: credentials);
-
-        return Ok(new
-        {
-            accessToken = new JwtSecurityTokenHandler().WriteToken(jwt),
-            user = new
-            {
-                user.Id,
-                user.Email,
-                user.DisplayName
-            }
-        });
+        return Ok(await _jwtTokens.CreateResponseAsync(user));
     }
 }
 
