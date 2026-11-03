@@ -5,6 +5,7 @@ namespace SmartMoney.Api.Services;
 
 public class BudgetAlertService
 {
+    private static readonly SemaphoreSlim EvaluationLock = new(1, 1);
     private readonly AppDbContext _db;
     private readonly PushNotificationService _push;
 
@@ -18,15 +19,25 @@ public class BudgetAlertService
 
     public async Task EvaluateAsync(int familyGroupId, int year, int month)
     {
+        await EvaluationLock.WaitAsync();
+        try
+        {
+            await EvaluateLockedAsync(familyGroupId, year, month);
+        }
+        finally
+        {
+            EvaluationLock.Release();
+        }
+    }
+
+    private async Task EvaluateLockedAsync(int familyGroupId, int year, int month)
+    {
         var budget = await _db.FamilyBudgets.FirstOrDefaultAsync(b =>
             b.FamilyGroupId == familyGroupId &&
             b.Year == year &&
             b.Month == month);
 
-        if (budget == null || !_push.IsConfigured || budget.MonthlyLimit <= 0)
-            return;
-
-        if (budget.Exceeded100Sent)
+        if (budget == null || budget.MonthlyLimit <= 0)
             return;
 
         var start = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -39,6 +50,30 @@ public class BudgetAlertService
                 t.OccurredAtUtc < end)
             .Select(t => (long?)t.Amount)
             .SumAsync() ?? 0;
+
+        var warningThreshold = budget.MonthlyLimit * 0.8m;
+        var needsSave = false;
+
+        if (spent < warningThreshold)
+        {
+            if (budget.Warning80Sent || budget.Exceeded100Sent)
+            {
+                budget.Warning80Sent = false;
+                budget.Exceeded100Sent = false;
+                needsSave = true;
+            }
+        }
+        else if (spent < budget.MonthlyLimit && budget.Exceeded100Sent)
+        {
+            budget.Exceeded100Sent = false;
+            needsSave = true;
+        }
+
+        if (needsSave)
+            await _db.SaveChangesAsync();
+
+        if (!_push.IsConfigured)
+            return;
 
         var memberUserIds = await _db.FamilyMembers
             .Where(m => m.FamilyGroupId == familyGroupId)
@@ -68,6 +103,7 @@ public class BudgetAlertService
             if (sent > 0)
             {
                 budget.Exceeded100Sent = true;
+                budget.Warning80Sent = true;
                 await _db.SaveChangesAsync();
             }
 

@@ -32,21 +32,33 @@ public class WalletsController : ControllerBase
             .OrderBy(w => w.Name)
             .ToListAsync();
 
+        var walletIds = wallets.Select(w => w.Id).ToList();
+        var transactions = await _db.FamilyTransactions
+            .AsNoTracking()
+            .Where(t => t.UserId == userId &&
+                        (t.WalletId.HasValue && walletIds.Contains(t.WalletId.Value) ||
+                         t.ToWalletId.HasValue && walletIds.Contains(t.ToWalletId.Value)))
+            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId })
+            .ToListAsync();
+
         var result = new List<object>();
 
         foreach (var wallet in wallets)
         {
-            var transactions = await _db.FamilyTransactions
-                .Where(t => t.UserId == userId && t.WalletId == wallet.Id)
-                .Select(t => new { t.Amount, t.Type })
-                .ToListAsync();
-
             var income = transactions
-                .Where(t => t.Type == "income")
+                .Where(t => t.Type == "income" && t.WalletId == wallet.Id)
                 .Sum(t => t.Amount);
 
             var expense = transactions
-                .Where(t => t.Type == "expense")
+                .Where(t => t.Type == "expense" && t.WalletId == wallet.Id)
+                .Sum(t => t.Amount);
+
+            var transferOut = transactions
+                .Where(t => t.Type == "transfer" && t.WalletId == wallet.Id)
+                .Sum(t => t.Amount);
+
+            var transferIn = transactions
+                .Where(t => t.Type == "transfer" && t.ToWalletId == wallet.Id)
                 .Sum(t => t.Amount);
 
             result.Add(new
@@ -55,7 +67,7 @@ public class WalletsController : ControllerBase
                 wallet.Name,
                 wallet.Type,
                 wallet.InitialBalance,
-                CurrentBalance = wallet.InitialBalance + income - expense,
+                CurrentBalance = wallet.InitialBalance + income - expense - transferOut + transferIn,
                 wallet.CreatedAtUtc
             });
         }
@@ -78,16 +90,25 @@ public class WalletsController : ControllerBase
             return NotFound("Không tìm thấy ví.");
 
         var transactions = await _db.FamilyTransactions
-            .Where(t => t.UserId == userId && t.WalletId == wallet.Id)
-            .Select(t => new { t.Amount, t.Type })
+            .Where(t => t.UserId == userId &&
+                        (t.WalletId == wallet.Id || t.ToWalletId == wallet.Id))
+            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId })
             .ToListAsync();
 
         var income = transactions
-            .Where(t => t.Type == "income")
+            .Where(t => t.Type == "income" && t.WalletId == wallet.Id)
             .Sum(t => t.Amount);
 
         var expense = transactions
-            .Where(t => t.Type == "expense")
+            .Where(t => t.Type == "expense" && t.WalletId == wallet.Id)
+            .Sum(t => t.Amount);
+
+        var transferOut = transactions
+            .Where(t => t.Type == "transfer" && t.WalletId == wallet.Id)
+            .Sum(t => t.Amount);
+
+        var transferIn = transactions
+            .Where(t => t.Type == "transfer" && t.ToWalletId == wallet.Id)
             .Sum(t => t.Amount);
 
         return Ok(new
@@ -96,7 +117,7 @@ public class WalletsController : ControllerBase
             wallet.Name,
             wallet.Type,
             wallet.InitialBalance,
-            CurrentBalance = wallet.InitialBalance + income - expense,
+            CurrentBalance = wallet.InitialBalance + income - expense - transferOut + transferIn,
             wallet.CreatedAtUtc
         });
     }
@@ -167,6 +188,16 @@ public class WalletsController : ControllerBase
 
         if (request.InitialBalance < 0)
             return BadRequest("Số dư ban đầu không được âm.");
+
+        var hasTransactions = await _db.FamilyTransactions.AnyAsync(t =>
+            t.UserId == userId &&
+            (t.WalletId == id || t.ToWalletId == id));
+
+        if (hasTransactions && wallet.InitialBalance != request.InitialBalance)
+        {
+            return BadRequest(
+                "Không thể thay đổi số dư ban đầu sau khi ví đã có giao dịch. Hãy tạo giao dịch điều chỉnh số dư.");
+        }
 
         wallet.Name = request.Name.Trim();
         wallet.Type = type;

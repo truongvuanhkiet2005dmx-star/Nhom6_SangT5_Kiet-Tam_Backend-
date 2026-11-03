@@ -57,6 +57,12 @@ public class AppDbContext
             .HasForeignKey(t => t.WalletId)
             .OnDelete(DeleteBehavior.SetNull);
 
+        builder.Entity<FamilyTransaction>()
+            .HasOne<Wallet>()
+            .WithMany()
+            .HasForeignKey(t => t.ToWalletId)
+            .OnDelete(DeleteBehavior.SetNull);
+
         builder.Entity<FamilyBudget>()
             .HasIndex(b => new { b.FamilyGroupId, b.Year, b.Month })
             .IsUnique();

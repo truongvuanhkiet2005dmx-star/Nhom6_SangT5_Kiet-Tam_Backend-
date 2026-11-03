@@ -46,6 +46,7 @@ public class FamilyTransaction
     public string UserId { get; set; } = "";
     public int? FamilyGroupId { get; set; }
     public int? WalletId { get; set; }
+    public int? ToWalletId { get; set; }
     public long Amount { get; set; }
     public string Type { get; set; } = "expense";
     public string CategoryName { get; set; } = "Khác";

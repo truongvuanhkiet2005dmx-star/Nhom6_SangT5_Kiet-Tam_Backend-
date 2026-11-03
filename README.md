@@ -34,3 +34,36 @@ Google login và FCM cần Firebase Admin service account hợp lệ.
 - File Firebase không được commit; `.gitignore` đã loại `serviceAccountKey.json`.
 
 Nếu không có service account, backend vẫn khởi động và chạy được SQLite/JWT, nhưng Google login và gửi FCM không hoạt động.
+
+## CORS và Swagger
+
+Flutter Web chỉ được gọi API từ các origin khai báo trong cấu hình `Cors:AllowedOrigins`, ví dụ:
+
+```json
+{
+  "Cors": {
+    "AllowedOrigins": [
+      "http://localhost:3000"
+    ]
+  }
+}
+```
+
+Không dùng `AllowAnyOrigin` với credentials. Swagger mặc định chỉ bật trong Development; có thể bật Production rõ ràng bằng `Swagger:Enabled=true` khi cần vận hành.
+
+## EF Core migrations
+
+Sau khi kéo schema mới có cột ví đích chuyển khoản, chạy:
+
+```powershell
+dotnet ef migrations add AddTransferWallet
+dotnet ef database update
+```
+
+Migration hiện tại được tạo với tên `20261103165931_AddTransferWallet`; khi áp dụng local dùng `dotnet ef database update`.
+
+Không sửa hoặc xóa migration đã áp dụng.
+
+## Báo cáo tháng
+
+`GET /api/reports/monthly` trả trường `breakdown` gồm các mục có `categoryName`, `type` và `amount`. Trường thống nhất cho giá trị phân loại là `amount`; transfer không được tính là income hoặc expense.

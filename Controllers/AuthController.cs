@@ -31,6 +31,7 @@ public class AuthController : ControllerBase
         {
             UserName = email,
             Email = email,
+            EmailConfirmed = true,
             DisplayName = request.DisplayName.Trim()
         };
 

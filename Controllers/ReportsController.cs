@@ -87,9 +87,9 @@ public class ReportsController : ControllerBase
             {
                 categoryName = group.Key.CategoryName,
                 type = group.Key.Type,
-                total = group.Sum(t => t.Amount)
+                amount = group.Sum(t => t.Amount)
             })
-            .OrderByDescending(item => item.total)
+            .OrderByDescending(item => item.amount)
             .ToList();
 
         var daily = transactions
@@ -117,6 +117,12 @@ public class ReportsController : ControllerBase
             netAmount = totalIncome - totalExpense,
             transactionCount = transactions.Count,
             categories,
+            breakdown = categories.Select(item => new
+            {
+                categoryName = item.categoryName,
+                type = item.type,
+                amount = item.amount
+            }),
             daily
         });
     }

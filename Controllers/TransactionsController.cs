@@ -71,8 +71,18 @@ public class TransactionsController : ControllerBase
         if (request.Amount <= 0)
             return BadRequest("Số tiền phải lớn hơn 0.");
 
-        if (request.Type != "income" && request.Type != "expense")
-            return BadRequest("Type chỉ nhận income hoặc expense.");
+        if (request.Type != "income" &&
+            request.Type != "expense" &&
+            request.Type != "transfer")
+            return BadRequest("Type chỉ nhận income, expense hoặc transfer.");
+
+        if (string.IsNullOrWhiteSpace(request.EventId))
+            return BadRequest(new ProblemDetails
+            {
+                Status = StatusCodes.Status400BadRequest,
+                Title = "EventId bắt buộc",
+                Detail = "EventId là khóa đồng bộ ổn định; vui lòng gửi cùng EventId khi retry."
+            });
 
         if (request.WalletId.HasValue)
         {
@@ -81,6 +91,26 @@ public class TransactionsController : ControllerBase
 
             if (!ownsWallet)
                 return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
+        }
+
+        if (request.Type == "transfer")
+        {
+            if (!request.WalletId.HasValue || !request.ToWalletId.HasValue)
+                return BadRequest("Chuyển khoản cần có WalletId nguồn và ToWalletId đích.");
+
+            if (request.WalletId.Value == request.ToWalletId.Value)
+                return BadRequest("Ví nguồn và ví đích phải khác nhau.");
+
+            var ownedWalletCount = await _db.Wallets.CountAsync(w =>
+                w.UserId == userId &&
+                (w.Id == request.WalletId.Value || w.Id == request.ToWalletId.Value));
+
+            if (ownedWalletCount != 2)
+                return BadRequest("Ví nguồn hoặc ví đích không thuộc tài khoản của bạn.");
+        }
+        else if (request.ToWalletId.HasValue)
+        {
+            return BadRequest("ToWalletId chỉ được dùng khi Type là transfer.");
         }
 
         if (request.FamilyGroupId.HasValue)
@@ -93,9 +123,7 @@ public class TransactionsController : ControllerBase
                 return Forbid();
         }
 
-        var eventId = string.IsNullOrWhiteSpace(request.EventId)
-            ? Guid.NewGuid().ToString()
-            : request.EventId.Trim();
+        var eventId = request.EventId.Trim();
 
         var existing = await _db.FamilyTransactions.FirstOrDefaultAsync(t =>
             t.UserId == userId && t.EventId == eventId);
@@ -105,8 +133,12 @@ public class TransactionsController : ControllerBase
             if (TransactionsMatch(existing, request))
                 return Ok(existing);
 
-            return Conflict(
-                "EventId đã tồn tại nhưng dữ liệu giao dịch không khớp với bản ghi trước đó.");
+            return Conflict(new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "EventId trùng nhưng dữ liệu khác",
+                Detail = "EventId đã tồn tại nhưng dữ liệu giao dịch không khớp với bản ghi trước đó."
+            });
         }
 
         var transaction = new FamilyTransaction
@@ -115,6 +147,7 @@ public class TransactionsController : ControllerBase
             UserId = userId,
             FamilyGroupId = request.FamilyGroupId,
             WalletId = request.WalletId,
+            ToWalletId = request.Type == "transfer" ? request.ToWalletId : null,
             Amount = request.Amount,
             Type = request.Type,
             CategoryName = request.CategoryName ?? "Khác",
@@ -144,8 +177,12 @@ public class TransactionsController : ControllerBase
                 if (TransactionsMatch(concurrentExisting, request))
                     return Ok(concurrentExisting);
 
-                return Conflict(
-                    "EventId đã tồn tại nhưng dữ liệu giao dịch không khớp với bản ghi trước đó.");
+                return Conflict(new ProblemDetails
+                {
+                    Status = StatusCodes.Status409Conflict,
+                    Title = "EventId trùng nhưng dữ liệu khác",
+                    Detail = "EventId đã tồn tại nhưng dữ liệu giao dịch không khớp với bản ghi trước đó."
+                });
             }
 
             throw;
@@ -169,6 +206,7 @@ public class TransactionsController : ControllerBase
     {
         if (transaction.FamilyGroupId != request.FamilyGroupId ||
             transaction.WalletId != request.WalletId ||
+            transaction.ToWalletId != request.ToWalletId ||
             transaction.Amount != request.Amount ||
             !string.Equals(transaction.Type, request.Type, StringComparison.Ordinal) ||
             !string.Equals(
@@ -206,8 +244,21 @@ public class TransactionsController : ControllerBase
         if (request.Amount <= 0)
             return BadRequest("Số tiền phải lớn hơn 0.");
 
-        if (request.Type != "income" && request.Type != "expense")
-            return BadRequest("Type chỉ nhận income hoặc expense.");
+        if (request.Type != "income" &&
+            request.Type != "expense" &&
+            request.Type != "transfer")
+            return BadRequest("Type chỉ nhận income, expense hoặc transfer.");
+
+        if (!string.IsNullOrWhiteSpace(request.EventId) &&
+            !string.Equals(transaction.EventId, request.EventId.Trim(), StringComparison.Ordinal))
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Status = StatusCodes.Status400BadRequest,
+                Title = "Không thể đổi EventId",
+                Detail = "EventId là khóa đồng bộ; API bỏ qua hoặc thay đổi EventId sẽ không được xử lý."
+            });
+        }
 
         if (request.WalletId.HasValue)
         {
@@ -216,6 +267,26 @@ public class TransactionsController : ControllerBase
 
             if (!ownsWallet)
                 return BadRequest("Ví không tồn tại hoặc không thuộc tài khoản của bạn.");
+        }
+
+        if (request.Type == "transfer")
+        {
+            if (!request.WalletId.HasValue || !request.ToWalletId.HasValue)
+                return BadRequest("Chuyển khoản cần có WalletId nguồn và ToWalletId đích.");
+
+            if (request.WalletId.Value == request.ToWalletId.Value)
+                return BadRequest("Ví nguồn và ví đích phải khác nhau.");
+
+            var ownedWalletCount = await _db.Wallets.CountAsync(w =>
+                w.UserId == userId &&
+                (w.Id == request.WalletId.Value || w.Id == request.ToWalletId.Value));
+
+            if (ownedWalletCount != 2)
+                return BadRequest("Ví nguồn hoặc ví đích không thuộc tài khoản của bạn.");
+        }
+        else if (request.ToWalletId.HasValue)
+        {
+            return BadRequest("ToWalletId chỉ được dùng khi Type là transfer.");
         }
 
         if (request.FamilyGroupId.HasValue)
@@ -233,6 +304,8 @@ public class TransactionsController : ControllerBase
 
         transaction.FamilyGroupId = request.FamilyGroupId;
         transaction.WalletId = request.WalletId;
+        transaction.ToWalletId =
+            request.Type == "transfer" ? request.ToWalletId : null;
         transaction.Amount = request.Amount;
         transaction.Type = request.Type;
         transaction.CategoryName = request.CategoryName ?? "Khác";
@@ -316,4 +389,5 @@ public class TransactionRequest
     public string? Note { get; set; }
     public int? FamilyGroupId { get; set; }
     public int? WalletId { get; set; }
+    public int? ToWalletId { get; set; }
 }

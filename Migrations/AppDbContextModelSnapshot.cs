@@ -376,6 +376,9 @@ namespace Backend_Nhom6_Kiet_Tam_App_QuanLyChiTieu.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("ToWalletId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -390,6 +393,8 @@ namespace Backend_Nhom6_Kiet_Tam_App_QuanLyChiTieu.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("FamilyGroupId");
+
+                    b.HasIndex("ToWalletId");
 
                     b.HasIndex("WalletId");
 
@@ -506,6 +511,11 @@ namespace Backend_Nhom6_Kiet_Tam_App_QuanLyChiTieu.Migrations
                     b.HasOne("SmartMoney.Api.Models.FamilyGroup", null)
                         .WithMany()
                         .HasForeignKey("FamilyGroupId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("SmartMoney.Api.Models.Wallet", null)
+                        .WithMany()
+                        .HasForeignKey("ToWalletId")
                         .OnDelete(DeleteBehavior.SetNull);
 
                     b.HasOne("SmartMoney.Api.Models.Wallet", null)

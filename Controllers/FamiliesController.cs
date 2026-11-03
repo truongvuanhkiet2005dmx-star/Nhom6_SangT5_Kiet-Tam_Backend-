@@ -70,7 +70,7 @@ public class FamiliesController : ControllerBase
         {
             Name = request.Name.Trim(),
             OwnerUserId = userId,
-            InviteCode = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant(),
+            InviteCode = "",
             CreatedAtUtc = DateTime.UtcNow,
             Members =
             [
@@ -88,7 +88,20 @@ public class FamiliesController : ControllerBase
         };
 
         _db.FamilyGroups.Add(family);
-        await _db.SaveChangesAsync();
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            family.InviteCode = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+            try
+            {
+                await _db.SaveChangesAsync();
+                break;
+            }
+            catch (DbUpdateException)
+            {
+                if (attempt == 4)
+                    return Conflict("Không thể tạo mã mời duy nhất sau 5 lần thử.");
+            }
+        }
 
         return Ok(new
         {
@@ -185,6 +198,11 @@ public class FamiliesController : ControllerBase
         }
 
         _db.FamilyMembers.Remove(member);
+        var oldTransactions = await _db.FamilyTransactions
+            .Where(t => t.UserId == userId && t.FamilyGroupId == familyGroupId)
+            .ToListAsync();
+        foreach (var transaction in oldTransactions)
+            transaction.FamilyGroupId = null;
         await _db.SaveChangesAsync();
 
         return Ok(new { message = "Đã rời nhóm gia đình." });
@@ -226,6 +244,11 @@ public class FamiliesController : ControllerBase
             return NotFound("Không tìm thấy thành viên trong nhóm.");
 
         _db.FamilyMembers.Remove(member);
+        var memberTransactions = await _db.FamilyTransactions
+            .Where(t => t.UserId == memberUserId && t.FamilyGroupId == familyGroupId)
+            .ToListAsync();
+        foreach (var transaction in memberTransactions)
+            transaction.FamilyGroupId = null;
         await _db.SaveChangesAsync();
 
         return Ok(new { message = "Đã xóa thành viên khỏi nhóm." });

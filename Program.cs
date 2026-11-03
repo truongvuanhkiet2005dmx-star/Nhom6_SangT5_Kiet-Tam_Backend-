@@ -4,7 +4,9 @@ using FirebaseAdmin.Auth;
 using FirebaseAdmin.Messaging;
 using Google.Apis.Auth.OAuth2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -16,6 +18,30 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddProblemDetails();
+
+var allowedOrigins = builder.Configuration
+    .GetSection("Cors:AllowedOrigins")
+    .Get<string[]>() ?? Array.Empty<string>();
+
+if (builder.Environment.IsDevelopment() && allowedOrigins.Length == 0)
+{
+    allowedOrigins =
+    [
+        "http://localhost:3000",
+        "http://localhost:5087",
+        "https://localhost:7076"
+    ];
+}
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("FlutterWeb", policy =>
+        policy.WithOrigins(allowedOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials());
+});
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite(
@@ -57,25 +83,60 @@ builder.Services
             ValidateLifetime = true,
             ClockSkew = TimeSpan.Zero
         };
+        options.Events = new JwtBearerEvents
+        {
+            OnChallenge = async context =>
+            {
+                context.HandleResponse();
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                context.Response.ContentType = "application/problem+json";
+                await context.Response.WriteAsJsonAsync(new ProblemDetails
+                {
+                    Status = StatusCodes.Status401Unauthorized,
+                    Title = "Phiên đăng nhập không hợp lệ hoặc đã hết hạn",
+                    Detail = "Vui lòng đăng nhập lại để nhận access token mới."
+                });
+            }
+        };
     });
 
 builder.Services.AddAuthorization();
 
 FirebaseMessaging? firebaseMessaging = null;
+FirebaseApp? firebaseApp = null;
 var serviceAccountPath =
     builder.Configuration["Firebase:ServiceAccountPath"];
 
-if (!string.IsNullOrWhiteSpace(serviceAccountPath) &&
-    File.Exists(serviceAccountPath))
+if (string.IsNullOrWhiteSpace(serviceAccountPath))
 {
-    var firebaseApp = FirebaseApp.Create(new AppOptions
+    Console.Error.WriteLine(
+        "Firebase Admin chưa được cấu hình: thiếu Firebase:ServiceAccountPath.");
+}
+else if (!File.Exists(serviceAccountPath))
+{
+    Console.Error.WriteLine(
+        "Firebase Admin chưa được cấu hình: service account file không tồn tại.");
+}
+else
+{
+    try
     {
-        Credential = GoogleCredential.FromFile(serviceAccountPath),
-        ProjectId = builder.Configuration["Firebase:ProjectId"]
-    });
+        firebaseApp = FirebaseApp.Create(new AppOptions
+        {
+            Credential = GoogleCredential.FromFile(serviceAccountPath),
+            ProjectId = builder.Configuration["Firebase:ProjectId"]
+        });
 
-    firebaseMessaging = FirebaseMessaging.GetMessaging(firebaseApp);
-    builder.Services.AddSingleton(FirebaseAuth.GetAuth(firebaseApp));
+        firebaseMessaging = FirebaseMessaging.GetMessaging(firebaseApp);
+        builder.Services.AddSingleton(FirebaseAuth.GetAuth(firebaseApp));
+    }
+    catch (Exception ex)
+    {
+        firebaseApp = null;
+        firebaseMessaging = null;
+        Console.Error.WriteLine(
+            $"Firebase Admin không khởi tạo được: {ex.Message}");
+    }
 }
 
 builder.Services.AddSingleton(
@@ -119,16 +180,49 @@ builder.Services.AddSwaggerGen(options =>
 
 var app = builder.Build();
 
-app.UseSwagger();
-app.UseSwaggerUI();
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var feature = context.Features.Get<IExceptionHandlerFeature>();
+        var status = StatusCodes.Status500InternalServerError;
+        var detail = app.Environment.IsDevelopment()
+            ? feature?.Error.Message ?? "Lỗi máy chủ không xác định."
+            : "Đã xảy ra lỗi máy chủ. Vui lòng thử lại.";
+
+        context.Response.StatusCode = status;
+        context.Response.ContentType = "application/problem+json";
+        await context.Response.WriteAsJsonAsync(new ProblemDetails
+        {
+            Status = status,
+            Title = "Lỗi máy chủ nội bộ",
+            Detail = detail
+        });
+    });
+});
+
+var swaggerEnabled = app.Environment.IsDevelopment() ||
+    builder.Configuration.GetValue<bool>("Swagger:Enabled");
+
+if (swaggerEnabled)
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
 if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
 }
+app.UseCors("FlutterWeb");
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+if (firebaseApp != null)
+{
+    app.Lifetime.ApplicationStopping.Register(() => firebaseApp.Delete());
+}
 
 app.Run();
