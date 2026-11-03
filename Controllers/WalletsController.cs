@@ -1,0 +1,205 @@
+﻿using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using SmartMoney.Api.Data;
+using SmartMoney.Api.Models;
+
+namespace SmartMoney.Api.Controllers;
+
+[ApiController]
+[Route("api/wallets")]
+[Authorize]
+public class WalletsController : ControllerBase
+{
+    private readonly AppDbContext _db;
+
+    public WalletsController(AppDbContext db)
+    {
+        _db = db;
+    }
+
+    // Lấy danh sách ví kèm số dư hiện tại
+    [HttpGet]
+    public async Task<IActionResult> GetAll()
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        var wallets = await _db.Wallets
+            .Where(w => w.UserId == userId)
+            .OrderBy(w => w.Name)
+            .ToListAsync();
+
+        var result = new List<object>();
+
+        foreach (var wallet in wallets)
+        {
+            var transactions = await _db.FamilyTransactions
+                .Where(t => t.UserId == userId && t.WalletId == wallet.Id)
+                .Select(t => new { t.Amount, t.Type })
+                .ToListAsync();
+
+            var income = transactions
+                .Where(t => t.Type == "income")
+                .Sum(t => t.Amount);
+
+            var expense = transactions
+                .Where(t => t.Type == "expense")
+                .Sum(t => t.Amount);
+
+            result.Add(new
+            {
+                wallet.Id,
+                wallet.Name,
+                wallet.Type,
+                wallet.InitialBalance,
+                CurrentBalance = wallet.InitialBalance + income - expense,
+                wallet.CreatedAtUtc
+            });
+        }
+
+        return Ok(result);
+    }
+
+    // Lấy một ví
+    [HttpGet("{id:int}")]
+    public async Task<IActionResult> GetOne(int id)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        var wallet = await _db.Wallets
+            .FirstOrDefaultAsync(w => w.Id == id && w.UserId == userId);
+
+        if (wallet == null)
+            return NotFound("Không tìm thấy ví.");
+
+        var transactions = await _db.FamilyTransactions
+            .Where(t => t.UserId == userId && t.WalletId == wallet.Id)
+            .Select(t => new { t.Amount, t.Type })
+            .ToListAsync();
+
+        var income = transactions
+            .Where(t => t.Type == "income")
+            .Sum(t => t.Amount);
+
+        var expense = transactions
+            .Where(t => t.Type == "expense")
+            .Sum(t => t.Amount);
+
+        return Ok(new
+        {
+            wallet.Id,
+            wallet.Name,
+            wallet.Type,
+            wallet.InitialBalance,
+            CurrentBalance = wallet.InitialBalance + income - expense,
+            wallet.CreatedAtUtc
+        });
+    }
+
+    // Tạo ví
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] WalletRequest request)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return BadRequest("Tên ví không được để trống.");
+
+        var type = request.Type.Trim().ToLowerInvariant();
+        if (type != "cash" && type != "bank" && type != "ewallet")
+            return BadRequest("Type chỉ nhận cash, bank hoặc ewallet.");
+
+        if (request.InitialBalance < 0)
+            return BadRequest("Số dư ban đầu không được âm.");
+
+        var wallet = new Wallet
+        {
+            UserId = userId,
+            Name = request.Name.Trim(),
+            Type = type,
+            InitialBalance = request.InitialBalance,
+            CreatedAtUtc = DateTime.UtcNow
+        };
+
+        _db.Wallets.Add(wallet);
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            wallet.Id,
+            wallet.Name,
+            wallet.Type,
+            wallet.InitialBalance,
+            CurrentBalance = wallet.InitialBalance,
+            wallet.CreatedAtUtc
+        });
+    }
+
+    // Sửa ví
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Update(
+        int id,
+        [FromBody] WalletRequest request)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        var wallet = await _db.Wallets
+            .FirstOrDefaultAsync(w => w.Id == id && w.UserId == userId);
+
+        if (wallet == null)
+            return NotFound("Không tìm thấy ví.");
+
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return BadRequest("Tên ví không được để trống.");
+
+        var type = request.Type.Trim().ToLowerInvariant();
+        if (type != "cash" && type != "bank" && type != "ewallet")
+            return BadRequest("Type chỉ nhận cash, bank hoặc ewallet.");
+
+        if (request.InitialBalance < 0)
+            return BadRequest("Số dư ban đầu không được âm.");
+
+        wallet.Name = request.Name.Trim();
+        wallet.Type = type;
+        wallet.InitialBalance = request.InitialBalance;
+
+        await _db.SaveChangesAsync();
+        return Ok(wallet);
+    }
+
+    // Xóa ví; giao dịch cũ vẫn được giữ lại
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized();
+
+        var wallet = await _db.Wallets
+            .FirstOrDefaultAsync(w => w.Id == id && w.UserId == userId);
+
+        if (wallet == null)
+            return NotFound("Không tìm thấy ví.");
+
+        _db.Wallets.Remove(wallet);
+        await _db.SaveChangesAsync();
+
+        return NoContent();
+    }
+}
+
+public class WalletRequest
+{
+    public string Name { get; set; } = "";
+    public string Type { get; set; } = "cash";
+    public long InitialBalance { get; set; }
+}

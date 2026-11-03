@@ -1,0 +1,17 @@
+# Build output
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Local configuration and secrets
+appsettings*.json
+serviceAccountKey.json
+
+# Local databases
+*.db
+*.db-shm
+*.db-wal
