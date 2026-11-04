@@ -13,7 +13,11 @@ Môi trường Development dùng SQLite và JWT. Không commit các file cấu h
 
 Trên máy khác, tạo file `appsettings.Development.json` tại thư mục chứa `.csproj` bằng các khóa cấu hình trên. Dùng `Jwt:Key` riêng đủ dài cho mỗi môi trường; không ghi mật khẩu hoặc khóa thực vào Git.
 
+Khi chạy Production, truyền khóa bằng biến môi trường như `Jwt__Key`, `ConnectionStrings__DefaultConnection` hoặc secrets thay cho file cấu hình cục bộ. Không commit bất kỳ `appsettings.*.json` thật nào nếu file chứa khóa, mật khẩu hoặc thông tin kết nối riêng.
+
 Khi triển khai sau reverse proxy, điền địa chỉ IP proxy tin cậy vào `ForwardedHeaders:KnownProxies`. Nếu không cấu hình proxy tin cậy, giới hạn tốc độ có thể tính chung theo IP của proxy thay vì IP người dùng thực.
+
+Trong PowerShell, tên file project có ký tự `&` phải được đặt trong dấu nháy kép.
 
 ## Chạy HTTP cho Android Emulator
 
@@ -58,7 +62,7 @@ Không dùng `AllowAnyOrigin` với credentials. Swagger mặc định chỉ b�
 Migration mới nhất thay đổi schema là `AddAdjustmentDirection`. Các migration liên quan khác gồm `AddTransferWallet` và `AddWalletClientIdAndTokenOwnership`; `EnableLockoutForExistingUsers` là migration data-only, chỉ bật `LockoutEnabled` cho tài khoản hiện có. Production phải chạy migration bằng pipeline hoặc chạy thủ công lệnh dưới đây.
 
 ```powershell
-dotnet ef database update --project Backend_Nhom6_Kiet&Tam_App_QuanLyChiTieu.csproj
+dotnet ef database update --project "Backend_Nhom6_Kiet&Tam_App_QuanLyChiTieu.csproj"
 ```
 
 Không tự áp dụng migration vào database local; không sửa migration cũ.
@@ -121,6 +125,6 @@ Rate limiting login/register/google/join được phân vùng theo IP; một IP 
 Chạy build và test:
 
 ```powershell
-dotnet build Backend_Nhom6_Kiet&Tam_App_QuanLyChiTieu.csproj
-dotnet test SmartMoney.Api.Tests/SmartMoney.Api.Tests.csproj
+dotnet build "Backend_Nhom6_Kiet&Tam_App_QuanLyChiTieu.csproj"
+dotnet test "SmartMoney.Api.Tests/SmartMoney.Api.Tests.csproj"
 ```

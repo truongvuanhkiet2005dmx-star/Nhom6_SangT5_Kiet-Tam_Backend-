@@ -39,8 +39,6 @@ public class DeviceTokensController : ControllerBase
         var token = request.Token.Trim();
         if (token.Length > 4096)
             return BadRequest("Token thiết bị không được vượt quá 4096 ký tự.");
-        if (token.Length > 4096)
-            return BadRequest("Token thiết bị không được vượt quá 4096 ký tự.");
 
         var otherAssignments = await _db.DeviceTokens
             .Where(d => d.Token == token && d.UserId != userId)
