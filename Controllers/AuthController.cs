@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using SmartMoney.Api.Models;
@@ -15,15 +16,18 @@ public class AuthController : ControllerBase
     private readonly UserManager<ApplicationUser> _users;
     private readonly JwtTokenService _jwtTokens;
     private readonly OtpAuthService _otpAuth;
+    private readonly AccountCleanupService _accountCleanup;
 
     public AuthController(
         UserManager<ApplicationUser> users,
         JwtTokenService jwtTokens,
-        OtpAuthService otpAuth)
+        OtpAuthService otpAuth,
+        AccountCleanupService accountCleanup)
     {
         _users = users;
         _jwtTokens = jwtTokens;
         _otpAuth = otpAuth;
+        _accountCleanup = accountCleanup;
     }
 
     [HttpPost("register")]
@@ -216,6 +220,47 @@ public class AuthController : ControllerBase
         return Ok(new { message = "Mật khẩu đã được đổi." });
     }
 
+    [HttpDelete("account")]
+    [Authorize]
+    public async Task<IActionResult> DeleteAccount([FromBody] AccountDeleteRequest request)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized(new { message = "Phiên đăng nhập không hợp lệ." });
+
+        var user = await _users.FindByIdAsync(userId);
+        if (user == null)
+            return Unauthorized(new { message = "Không tìm thấy tài khoản." });
+
+        if (await _users.HasPasswordAsync(user))
+        {
+            var passwordValid = await _users.CheckPasswordAsync(user, request.Password ?? "");
+            if (!passwordValid)
+                return BadRequest(new { message = "Mật khẩu không đúng." });
+        }
+
+        if (await _accountCleanup.HasOwnedFamilyWithOtherMembersAsync(userId))
+        {
+            return StatusCode(StatusCodes.Status409Conflict, new
+            {
+                message = "Bạn là chủ nhóm gia đình, hãy xóa nhóm hoặc xóa các thành viên trước."
+            });
+        }
+
+        try
+        {
+            await _accountCleanup.CleanupAsync(user);
+            return Ok(new { message = "Đã xóa tài khoản." });
+        }
+        catch (Exception)
+        {
+            return StatusCode(StatusCodes.Status500InternalServerError, new
+            {
+                message = "Không thể xóa tài khoản lúc này. Vui lòng thử lại sau."
+            });
+        }
+    }
+
     [HttpPost("otp/request")]
     [EnableRateLimiting("auth")]
     public async Task<IActionResult> RequestOtp([FromBody] OtpRequestRequest request)
@@ -388,4 +433,9 @@ public class PasswordChangeRequest
 {
     public string CurrentPassword { get; set; } = "";
     public string NewPassword { get; set; } = "";
+}
+
+public class AccountDeleteRequest
+{
+    public string Password { get; set; } = "";
 }

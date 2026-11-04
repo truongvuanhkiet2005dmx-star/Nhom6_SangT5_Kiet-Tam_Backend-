@@ -1,9 +1,12 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using SmartMoney.Api.Controllers;
 using SmartMoney.Api.Data;
 using SmartMoney.Api.Models;
@@ -281,6 +284,158 @@ public class WalletBalanceTests
 
             Assert.IsType<BadRequestObjectResult>(result);
             Assert.Equal(0, await db.FamilyTransactions.CountAsync());
+        }
+    }
+}
+
+public class AccountCleanupTests
+{
+    private static async Task<(AppDbContext Db, SqliteConnection Connection)> CreateDbAsync()
+    {
+        var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+        var db = new AppDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+        return (db, connection);
+    }
+
+    private static UserManager<ApplicationUser> CreateUserManager(AppDbContext db)
+    {
+        var store = new UserStore<ApplicationUser>(db);
+        return new UserManager<ApplicationUser>(
+            store,
+            Options.Create(new IdentityOptions()),
+            new PasswordHasher<ApplicationUser>(),
+            Array.Empty<IUserValidator<ApplicationUser>>(),
+            Array.Empty<IPasswordValidator<ApplicationUser>>(),
+            new UpperInvariantLookupNormalizer(),
+            new IdentityErrorDescriber(),
+            null!,
+            NullLogger<UserManager<ApplicationUser>>.Instance);
+    }
+
+    [Fact]
+    public async Task CleanupDeletesOnlyUserADataAndKeepsUserBWalletAndTransaction()
+    {
+        var (db, connection) = await CreateDbAsync();
+        await using (connection)
+        await using (db)
+        {
+            var userA = new ApplicationUser
+            {
+                Id = "a",
+                UserName = "a@example.com",
+                NormalizedUserName = "A@EXAMPLE.COM",
+                Email = "a@example.com",
+                NormalizedEmail = "A@EXAMPLE.COM",
+                EmailConfirmed = true
+            };
+            db.Users.Add(userA);
+
+            var group = new FamilyGroup
+            {
+                Name = "Nhóm A",
+                OwnerUserId = "a",
+                InviteCode = "ABC123"
+            };
+            db.FamilyGroups.Add(group);
+            await db.SaveChangesAsync();
+
+            db.FamilyMembers.Add(new FamilyMember
+            {
+                FamilyGroupId = group.Id,
+                UserId = "a",
+                DisplayName = "A",
+                AccessRole = "Owner"
+            });
+            db.FamilyBudgets.Add(new FamilyBudget
+            {
+                FamilyGroupId = group.Id,
+                Year = 2026,
+                Month = 11,
+                MonthlyLimit = 100000
+            });
+
+            var walletA = new Wallet { UserId = "a", Name = "Ví A", InitialBalance = 100 };
+            var walletB = new Wallet { UserId = "b", Name = "Ví B", InitialBalance = 200 };
+            db.Wallets.AddRange(walletA, walletB);
+            await db.SaveChangesAsync();
+
+            db.FamilyTransactions.AddRange(
+                new FamilyTransaction
+                {
+                    EventId = "a-event",
+                    UserId = "a",
+                    FamilyGroupId = group.Id,
+                    WalletId = walletA.Id,
+                    Type = "expense",
+                    Amount = 50
+                },
+                new FamilyTransaction
+                {
+                    EventId = "b-event",
+                    UserId = "b",
+                    FamilyGroupId = group.Id,
+                    WalletId = walletB.Id,
+                    Type = "income",
+                    Amount = 75
+                });
+            db.EmailOtpChallenges.Add(new EmailOtpChallenge
+            {
+                Email = "a@example.com",
+                CodeHash = "hash",
+                CodeSalt = "salt",
+                ExpiresAtUtc = DateTime.UtcNow.AddMinutes(5)
+            });
+            await db.SaveChangesAsync();
+
+            var cleanup = new AccountCleanupService(db, CreateUserManager(db));
+            await cleanup.CleanupAsync(userA);
+
+            Assert.False(await db.Wallets.AnyAsync(w => w.UserId == "a"));
+            Assert.False(await db.FamilyTransactions.AnyAsync(t => t.UserId == "a"));
+            Assert.True(await db.Wallets.AnyAsync(w => w.UserId == "b"));
+            Assert.True(await db.FamilyTransactions.AnyAsync(t => t.UserId == "b"));
+            Assert.False(await db.FamilyGroups.AnyAsync(g => g.Id == group.Id));
+        }
+    }
+
+    [Fact]
+    public async Task OwnedFamilyWithOtherMemberIsDetected()
+    {
+        var (db, connection) = await CreateDbAsync();
+        await using (connection)
+        await using (db)
+        {
+            var group = new FamilyGroup
+            {
+                Name = "Nhóm chung",
+                OwnerUserId = "owner",
+                InviteCode = "OWNER1"
+            };
+            db.FamilyGroups.Add(group);
+            await db.SaveChangesAsync();
+
+            db.FamilyMembers.AddRange(
+                new FamilyMember
+                {
+                    FamilyGroupId = group.Id,
+                    UserId = "owner",
+                    AccessRole = "Owner"
+                },
+                new FamilyMember
+                {
+                    FamilyGroupId = group.Id,
+                    UserId = "member-b",
+                    AccessRole = "Member"
+                });
+            await db.SaveChangesAsync();
+
+            var cleanup = new AccountCleanupService(db, CreateUserManager(db));
+            Assert.True(await cleanup.HasOwnedFamilyWithOtherMembersAsync("owner"));
         }
     }
 }
