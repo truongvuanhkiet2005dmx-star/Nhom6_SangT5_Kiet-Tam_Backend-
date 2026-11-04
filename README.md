@@ -13,6 +13,8 @@ Môi trường Development dùng SQLite và JWT. Không commit các file cấu h
 
 Trên máy khác, tạo file `appsettings.Development.json` tại thư mục chứa `.csproj` bằng các khóa cấu hình trên. Dùng `Jwt:Key` riêng đủ dài cho mỗi môi trường; không ghi mật khẩu hoặc khóa thực vào Git.
 
+Khi triển khai sau reverse proxy, điền địa chỉ IP proxy tin cậy vào `ForwardedHeaders:KnownProxies`. Nếu không cấu hình proxy tin cậy, giới hạn tốc độ có thể tính chung theo IP của proxy thay vì IP người dùng thực.
+
 ## Chạy HTTP cho Android Emulator
 
 Chạy profile `http` để backend dùng HTTP trên cổng 5087:

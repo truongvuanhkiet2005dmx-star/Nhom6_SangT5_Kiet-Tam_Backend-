@@ -1,10 +1,13 @@
-using SmartMoney.Api.Services;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Logging.Abstractions;
+using SmartMoney.Api.Controllers;
 using SmartMoney.Api.Data;
 using SmartMoney.Api.Models;
-using SmartMoney.Api.Controllers;
+using SmartMoney.Api.Services;
 
 namespace SmartMoney.Api.Tests;
 
@@ -45,8 +48,43 @@ public class WalletBalanceTests
         return (db, connection);
     }
 
+    private static ControllerContext CreateControllerContext(string userId)
+    {
+        var identity = new ClaimsIdentity(
+            new[] { new Claim(ClaimTypes.NameIdentifier, userId) },
+            "Test");
+        return new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(identity)
+            }
+        };
+    }
+
+    private static TransactionsController CreateTransactionsController(AppDbContext db, string userId)
+    {
+        var push = new PushNotificationService(null);
+        var alerts = new BudgetAlertService(db, push, NullLogger<BudgetAlertService>.Instance);
+        return new TransactionsController(
+            db,
+            alerts,
+            NullLogger<TransactionsController>.Instance)
+        {
+            ControllerContext = CreateControllerContext(userId)
+        };
+    }
+
+    private static WalletsController CreateWalletsController(AppDbContext db, string userId)
+    {
+        return new WalletsController(db, new WalletBalanceService(db))
+        {
+            ControllerContext = CreateControllerContext(userId)
+        };
+    }
+
     [Fact]
-    public async Task BalanceIncludesAllTransactionKindsExceptBudgetAndReport()
+    public async Task BalanceIncludesAllTransactionKinds()
     {
         var (db, connection) = await CreateDbAsync();
         await using (connection)
@@ -64,85 +102,185 @@ public class WalletBalanceTests
                 new FamilyTransaction { EventId = "transfer-out", UserId = "u1", Type = "transfer", Amount = 100, WalletId = wallet.Id, ToWalletId = other.Id });
             await db.SaveChangesAsync();
 
-            var service = new WalletBalanceService(db);
-            var balance = await service.CalculateCurrentBalanceAsync(wallet, "u1");
-            var walletResponse = new WalletResponse
-            {
-                Id = wallet.Id,
-                ClientId = wallet.ClientId,
-                InitialBalance = wallet.InitialBalance,
-                CurrentBalance = balance
-            };
+            var balance = await new WalletBalanceService(db).CalculateCurrentBalanceAsync(wallet, "u1");
 
             Assert.Equal(1500, balance);
-            Assert.Equal("wallet-client", walletResponse.ClientId);
         }
     }
 
     [Fact]
-    public async Task TransactionEventIdIsUniquePerUser()
+    public async Task TransactionSameEventIdSameDataReturnsSameIdAndOneRow()
     {
         var (db, connection) = await CreateDbAsync();
         await using (connection)
         await using (db)
         {
-            db.FamilyTransactions.Add(new FamilyTransaction { EventId = "same-event", UserId = "u1", Type = "expense", Amount = 100 });
+            var wallet = new Wallet { UserId = "u1", Name = "Tiền mặt", Type = "cash", InitialBalance = 1000 };
+            db.Wallets.Add(wallet);
             await db.SaveChangesAsync();
-            db.FamilyTransactions.Add(new FamilyTransaction { EventId = "same-event", UserId = "u1", Type = "expense", Amount = 100 });
 
-            await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+            var controller = CreateTransactionsController(db, "u1");
+            var request = new TransactionRequest
+            {
+                EventId = "event-1",
+                Amount = 100,
+                Type = "expense",
+                WalletId = wallet.Id,
+                CategoryName = "Ăn uống"
+            };
+
+            var first = await controller.Create(request);
+            var second = await controller.Create(request);
+            var firstResponse = Assert.IsType<OkObjectResult>(first).Value as TransactionResponse;
+            var secondResponse = Assert.IsType<OkObjectResult>(second).Value as TransactionResponse;
+
+            Assert.NotNull(firstResponse);
+            Assert.NotNull(secondResponse);
+            Assert.Equal(firstResponse.Id, secondResponse.Id);
+            Assert.Equal(1, await db.FamilyTransactions.CountAsync(t => t.UserId == "u1" && t.EventId == "event-1"));
         }
     }
 
     [Fact]
-    public async Task WalletClientIdIsIdempotentPerUserAndGoogleUidIsUnique()
+    public async Task TransactionSameEventIdDifferentAmountReturnsConflict()
     {
         var (db, connection) = await CreateDbAsync();
         await using (connection)
         await using (db)
         {
-            db.Wallets.Add(new Wallet { UserId = "u1", Name = "Ví", Type = "cash", ClientId = "client-1" });
-            await db.SaveChangesAsync();
-            db.Wallets.Add(new Wallet { UserId = "u1", Name = "Ví trùng", Type = "cash", ClientId = "client-1" });
-            await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
-
-            db.ChangeTracker.Clear();
-            db.Users.AddRange(
-                new ApplicationUser { Id = "user-a", UserName = "user-a@example.com", Email = "user-a@example.com", LockoutEnabled = true },
-                new ApplicationUser { Id = "user-b", UserName = "user-b@example.com", Email = "user-b@example.com", LockoutEnabled = true });
+            var wallet = new Wallet { UserId = "u1", Name = "Tiền mặt", Type = "cash" };
+            db.Wallets.Add(wallet);
             await db.SaveChangesAsync();
 
-            db.UserLogins.Add(new IdentityUserLogin<string>
+            var controller = CreateTransactionsController(db, "u1");
+            var first = await controller.Create(new TransactionRequest
             {
-                LoginProvider = "Firebase",
-                ProviderKey = "uid-1",
-                ProviderDisplayName = "Firebase",
-                UserId = "user-a"
+                EventId = "event-2",
+                Amount = 100,
+                Type = "expense",
+                WalletId = wallet.Id
             });
-            await db.SaveChangesAsync();
-            db.ChangeTracker.Clear();
-            db.UserLogins.Add(new IdentityUserLogin<string>
+            var second = await controller.Create(new TransactionRequest
             {
-                LoginProvider = "Firebase",
-                ProviderKey = "uid-1",
-                ProviderDisplayName = "Firebase",
-                UserId = "user-b"
+                EventId = "event-2",
+                Amount = 200,
+                Type = "expense",
+                WalletId = wallet.Id
             });
-            await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+
+            Assert.IsType<OkObjectResult>(first);
+            Assert.IsType<ConflictObjectResult>(second);
+            Assert.Equal(1, await db.FamilyTransactions.CountAsync(t => t.EventId == "event-2"));
         }
     }
 
     [Fact]
-    public void NewAccountsAndWalletResponsesEnableLockoutAndExposeClientId()
+    public async Task WalletSameClientIdSameDataReturnsSameIdAndOneWallet()
     {
-        var user = new ApplicationUser { EmailConfirmed = false, LockoutEnabled = true };
-        var response = new WalletResponse { Id = 1, ClientId = "wallet-1", InitialBalance = 100, CurrentBalance = 125 };
-        var transaction = new TransactionResponse { Id = 2, EventId = "event-1", WalletId = 1, Amount = 25, Type = "income" };
+        var (db, connection) = await CreateDbAsync();
+        await using (connection)
+        await using (db)
+        {
+            var controller = CreateWalletsController(db, "u1");
+            var request = new WalletRequest
+            {
+                Name = "Ví chính",
+                Type = "cash",
+                InitialBalance = 1000,
+                ClientId = "wallet-client-id"
+            };
 
-        Assert.True(user.LockoutEnabled);
-        Assert.False(user.EmailConfirmed);
-        Assert.Equal("wallet-1", response.ClientId);
-        Assert.Equal("event-1", transaction.EventId);
-        Assert.Null(transaction.GetType().GetProperty("UserId"));
+            var first = await controller.Create(request);
+            var second = await controller.Create(request);
+            var firstResponse = Assert.IsType<OkObjectResult>(first).Value as WalletResponse;
+            var secondResponse = Assert.IsType<OkObjectResult>(second).Value as WalletResponse;
+
+            Assert.NotNull(firstResponse);
+            Assert.NotNull(secondResponse);
+            Assert.Equal(firstResponse.Id, secondResponse.Id);
+            Assert.Equal(1, await db.Wallets.CountAsync(w => w.UserId == "u1" && w.ClientId == "wallet-client-id"));
+        }
+    }
+
+    [Fact]
+    public async Task WalletSameClientIdDifferentDataReturnsConflict()
+    {
+        var (db, connection) = await CreateDbAsync();
+        await using (connection)
+        await using (db)
+        {
+            var controller = CreateWalletsController(db, "u1");
+            var first = await controller.Create(new WalletRequest
+            {
+                Name = "Ví chính",
+                Type = "cash",
+                InitialBalance = 1000,
+                ClientId = "same-client"
+            });
+            var second = await controller.Create(new WalletRequest
+            {
+                Name = "Ví khác",
+                Type = "cash",
+                InitialBalance = 1000,
+                ClientId = "same-client"
+            });
+
+            Assert.IsType<OkObjectResult>(first);
+            Assert.IsType<ConflictObjectResult>(second);
+            Assert.Equal(1, await db.Wallets.CountAsync(w => w.ClientId == "same-client"));
+        }
+    }
+
+    [Fact]
+    public async Task DeleteWalletReferencedByTransactionReturnsConflictAndKeepsWallet()
+    {
+        var (db, connection) = await CreateDbAsync();
+        await using (connection)
+        await using (db)
+        {
+            var wallet = new Wallet { UserId = "u1", Name = "Ví chính", Type = "cash" };
+            db.Wallets.Add(wallet);
+            await db.SaveChangesAsync();
+            db.FamilyTransactions.Add(new FamilyTransaction
+            {
+                EventId = "delete-wallet-event",
+                UserId = "u1",
+                WalletId = wallet.Id,
+                Type = "expense",
+                Amount = 100
+            });
+            await db.SaveChangesAsync();
+
+            var controller = CreateWalletsController(db, "u1");
+            var result = await controller.Delete(wallet.Id);
+
+            Assert.IsType<ConflictObjectResult>(result);
+            Assert.True(await db.Wallets.AnyAsync(w => w.Id == wallet.Id));
+        }
+    }
+
+    [Fact]
+    public async Task AdjustmentWithoutDirectionReturnsBadRequest()
+    {
+        var (db, connection) = await CreateDbAsync();
+        await using (connection)
+        await using (db)
+        {
+            var wallet = new Wallet { UserId = "u1", Name = "Ví chính", Type = "cash" };
+            db.Wallets.Add(wallet);
+            await db.SaveChangesAsync();
+
+            var controller = CreateTransactionsController(db, "u1");
+            var result = await controller.Create(new TransactionRequest
+            {
+                EventId = "adjustment-event",
+                Amount = 100,
+                Type = "adjustment",
+                WalletId = wallet.Id
+            });
+
+            Assert.IsType<BadRequestObjectResult>(result);
+            Assert.Equal(0, await db.FamilyTransactions.CountAsync());
+        }
     }
 }

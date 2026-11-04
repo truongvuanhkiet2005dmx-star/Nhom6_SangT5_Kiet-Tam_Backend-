@@ -146,6 +146,7 @@ public class GoogleAuthController : ControllerBase
 
     [HttpPost("google/link")]
     [Authorize]
+    [EnableRateLimiting("auth")]
     public async Task<IActionResult> LinkGoogle([FromBody] GoogleLoginRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.IdToken))
