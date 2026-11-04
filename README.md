@@ -118,6 +118,29 @@ Backend hiện chưa triển khai email verification flow, vì vậy tài khoả
 
 Rate limiting login/register/google/join được phân vùng theo IP; một IP không làm ảnh hưởng hoàn toàn đến IP khác. Khi chạy sau reverse proxy, cấu hình forwarded headers đúng để lấy IP thực; ở một số môi trường serverless/multi-instance giới hạn theo bộ nhớ vẫn có thể khác nhau giữa các instance.
 
+## Đăng nhập bằng OTP email
+
+Endpoint OTP gồm:
+
+- `POST /api/auth/otp/request` nhận `{ "email": "user@example.com" }`.
+- `POST /api/auth/otp/verify` nhận `{ "email": "user@example.com", "otp": "123456" }`.
+
+OTP 6 số dùng SHA-256 kết hợp salt ngẫu nhiên, hết hạn sau 5 phút, dùng một lần và giới hạn 5 lần nhập sai. Gửi lại bị chặn 60 giây cho cùng email.
+
+SMTP được cấu hình qua IConfiguration/User Secrets, không ghi mật khẩu vào file mẫu hay Git:
+
+```powershell
+dotnet user-secrets set "Smtp:Host" "smtp.example.com"
+dotnet user-secrets set "Smtp:Port" "587"
+dotnet user-secrets set "Smtp:Username" "<SMTP_USERNAME>"
+dotnet user-secrets set "Smtp:Password" "<SMTP_PASSWORD>"
+dotnet user-secrets set "Smtp:FromEmail" "<FROM_EMAIL>"
+dotnet user-secrets set "Smtp:FromName" "SmartMoney"
+dotnet user-secrets set "Smtp:EnableSsl" "true"
+```
+
+Khi triển khai, truyền các khóa `Smtp__Host`, `Smtp__Port`, `Smtp__Username`, `Smtp__Password`, `Smtp__FromEmail`, `Smtp__FromName`, `Smtp__EnableSsl` bằng secrets hoặc biến môi trường của nền tảng. Không ghi Gmail App Password, SMTP password hoặc service account thật vào `appsettings.json`, `appsettings.Example.json`, README hoặc Git.
+
 `OccurredAtUtc` được chuẩn hóa sang UTC, đầu ra transaction sử dụng `DateTimeOffset` theo offset `+00:00`. Mốc báo cáo, ngân sách và nhóm ngày hàng tháng dùng múi giờ Việt Nam (UTC+7), không phụ thuộc múi giờ máy chủ.
 
 ## Kiểm thử

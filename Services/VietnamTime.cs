@@ -25,6 +25,15 @@ public static class VietnamTime
         return (startUtc, endUtc);
     }
 
+    public static (DateTime StartUtc, DateTime EndUtc) GetYearUtcRange(int year)
+    {
+        var startLocal = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
+        var endLocal = new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
+        var startUtc = TimeZoneInfo.ConvertTimeToUtc(startLocal, VietnamZone);
+        var endUtc = TimeZoneInfo.ConvertTimeToUtc(endLocal, VietnamZone);
+        return (startUtc, endUtc);
+    }
+
     public static DateTime NormalizeUtc(DateTime value)
     {
         if (value.Kind == DateTimeKind.Utc)

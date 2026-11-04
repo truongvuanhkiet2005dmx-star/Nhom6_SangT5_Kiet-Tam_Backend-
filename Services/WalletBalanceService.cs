@@ -17,13 +17,8 @@ public class WalletBalanceService
         Wallet wallet,
         string userId)
     {
-        var transactions = await _db.FamilyTransactions
-            .AsNoTracking()
-            .Where(t => t.UserId == userId &&
-                        (t.WalletId == wallet.Id || t.ToWalletId == wallet.Id))
-            .ToListAsync();
-
-        return CalculateCurrentBalance(wallet, transactions);
+        var balances = await CalculateCurrentBalancesAsync([wallet], userId);
+        return balances.GetValueOrDefault(wallet.Id, wallet.InitialBalance);
     }
 
     public async Task<Dictionary<int, long>> CalculateCurrentBalancesAsync(
@@ -34,35 +29,87 @@ public class WalletBalanceService
             return new Dictionary<int, long>();
 
         var walletIds = wallets.Select(w => w.Id).ToList();
-        var transactions = await _db.FamilyTransactions
-            .AsNoTracking()
-            .Where(t => t.UserId == userId &&
-                        (t.WalletId.HasValue && walletIds.Contains(t.WalletId.Value) ||
-                         t.ToWalletId.HasValue && walletIds.Contains(t.ToWalletId.Value)))
-            .ToListAsync();
-
         var result = new Dictionary<int, long>();
         foreach (var wallet in wallets)
-        {
-            result[wallet.Id] = CalculateCurrentBalance(wallet, transactions);
-        }
+            result[wallet.Id] = wallet.InitialBalance;
+
+        await ApplySourceTotalsAsync(
+            result, walletIds, userId, "income", 1);
+        await ApplySourceTotalsAsync(
+            result, walletIds, userId, "expense", -1);
+        await ApplySourceTotalsAsync(
+            result, walletIds, userId, "transfer", -1);
+        await ApplyDestinationTotalsAsync(
+            result, walletIds, userId, "transfer", 1);
+        await ApplyAdjustmentTotalsAsync(
+            result, walletIds, userId, "increase", 1);
+        await ApplyAdjustmentTotalsAsync(
+            result, walletIds, userId, "decrease", -1);
+
         return result;
     }
 
-    private static long CalculateCurrentBalance(
-        Wallet wallet,
-        IReadOnlyCollection<FamilyTransaction> transactions)
+    private async Task ApplySourceTotalsAsync(
+        Dictionary<int, long> balances,
+        IReadOnlyCollection<int> walletIds,
+        string userId,
+        string type,
+        int sign)
     {
-        return wallet.InitialBalance
-            + transactions.Where(t => t.Type == "income" && t.WalletId == wallet.Id).Sum(t => t.Amount)
-            - transactions.Where(t => t.Type == "expense" && t.WalletId == wallet.Id).Sum(t => t.Amount)
-            - transactions.Where(t => t.Type == "transfer" && t.WalletId == wallet.Id).Sum(t => t.Amount)
-            + transactions.Where(t => t.Type == "transfer" && t.ToWalletId == wallet.Id).Sum(t => t.Amount)
-            + transactions.Where(t => t.Type == "adjustment" &&
-                                   t.WalletId == wallet.Id &&
-                                   t.AdjustmentDirection == "increase").Sum(t => t.Amount)
-            - transactions.Where(t => t.Type == "adjustment" &&
-                                   t.WalletId == wallet.Id &&
-                                   t.AdjustmentDirection == "decrease").Sum(t => t.Amount);
+        var totals = await _db.FamilyTransactions
+            .AsNoTracking()
+            .Where(t => t.UserId == userId &&
+                        t.Type == type &&
+                        t.WalletId.HasValue &&
+                        walletIds.Contains(t.WalletId.Value))
+            .GroupBy(t => t.WalletId!.Value)
+            .Select(g => new { WalletId = g.Key, Amount = g.Sum(t => t.Amount) })
+            .ToListAsync();
+
+        foreach (var total in totals)
+            balances[total.WalletId] += sign * total.Amount;
+    }
+
+    private async Task ApplyDestinationTotalsAsync(
+        Dictionary<int, long> balances,
+        IReadOnlyCollection<int> walletIds,
+        string userId,
+        string type,
+        int sign)
+    {
+        var totals = await _db.FamilyTransactions
+            .AsNoTracking()
+            .Where(t => t.UserId == userId &&
+                        t.Type == type &&
+                        t.ToWalletId.HasValue &&
+                        walletIds.Contains(t.ToWalletId.Value))
+            .GroupBy(t => t.ToWalletId!.Value)
+            .Select(g => new { WalletId = g.Key, Amount = g.Sum(t => t.Amount) })
+            .ToListAsync();
+
+        foreach (var total in totals)
+            balances[total.WalletId] += sign * total.Amount;
+    }
+
+    private async Task ApplyAdjustmentTotalsAsync(
+        Dictionary<int, long> balances,
+        IReadOnlyCollection<int> walletIds,
+        string userId,
+        string direction,
+        int sign)
+    {
+        var totals = await _db.FamilyTransactions
+            .AsNoTracking()
+            .Where(t => t.UserId == userId &&
+                        t.Type == "adjustment" &&
+                        t.AdjustmentDirection == direction &&
+                        t.WalletId.HasValue &&
+                        walletIds.Contains(t.WalletId.Value))
+            .GroupBy(t => t.WalletId!.Value)
+            .Select(g => new { WalletId = g.Key, Amount = g.Sum(t => t.Amount) })
+            .ToListAsync();
+
+        foreach (var total in totals)
+            balances[total.WalletId] += sign * total.Amount;
     }
 }

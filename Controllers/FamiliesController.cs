@@ -226,11 +226,6 @@ public class FamiliesController : ControllerBase
         }
 
         _db.FamilyMembers.Remove(member);
-        var oldTransactions = await _db.FamilyTransactions
-            .Where(t => t.UserId == userId && t.FamilyGroupId == familyGroupId)
-            .ToListAsync();
-        foreach (var transaction in oldTransactions)
-            transaction.FamilyGroupId = null;
         await _db.SaveChangesAsync();
 
         return Ok(new { message = "Đã rời nhóm gia đình." });
@@ -272,11 +267,6 @@ public class FamiliesController : ControllerBase
             return NotFound("Không tìm thấy thành viên trong nhóm.");
 
         _db.FamilyMembers.Remove(member);
-        var memberTransactions = await _db.FamilyTransactions
-            .Where(t => t.UserId == memberUserId && t.FamilyGroupId == familyGroupId)
-            .ToListAsync();
-        foreach (var transaction in memberTransactions)
-            transaction.FamilyGroupId = null;
         await _db.SaveChangesAsync();
 
         return Ok(new { message = "Đã xóa thành viên khỏi nhóm." });

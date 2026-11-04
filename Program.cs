@@ -215,6 +215,7 @@ else
 builder.Services.AddSingleton(
     new PushNotificationService(firebaseMessaging));
 builder.Services.AddScoped<JwtTokenService>();
+builder.Services.AddScoped<OtpAuthService>();
 builder.Services.AddScoped<BudgetAlertService>();
 builder.Services.AddScoped<WalletBalanceService>();
 

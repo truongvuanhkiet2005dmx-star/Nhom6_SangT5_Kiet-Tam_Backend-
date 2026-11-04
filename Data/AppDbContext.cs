@@ -19,6 +19,7 @@ public class AppDbContext
     public DbSet<FamilyTransaction> FamilyTransactions => Set<FamilyTransaction>();
     public DbSet<FamilyBudget> FamilyBudgets => Set<FamilyBudget>();
     public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
+    public DbSet<EmailOtpChallenge> EmailOtpChallenges => Set<EmailOtpChallenge>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -82,5 +83,18 @@ public class AppDbContext
         builder.Entity<DeviceToken>()
             .HasIndex(d => d.Token)
             .IsUnique();
+
+        builder.Entity<EmailOtpChallenge>()
+            .HasIndex(c => c.Email)
+            .IsUnique();
+        builder.Entity<EmailOtpChallenge>()
+            .Property(c => c.Email)
+            .HasMaxLength(256);
+        builder.Entity<EmailOtpChallenge>()
+            .Property(c => c.CodeHash)
+            .HasMaxLength(128);
+        builder.Entity<EmailOtpChallenge>()
+            .Property(c => c.CodeSalt)
+            .HasMaxLength(128);
     }
 }

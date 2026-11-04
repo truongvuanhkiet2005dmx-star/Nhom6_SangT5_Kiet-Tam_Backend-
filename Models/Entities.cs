@@ -77,3 +77,16 @@ public class DeviceToken
     public string Token { get; set; } = "";
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }
+
+public class EmailOtpChallenge
+{
+    public int Id { get; set; }
+    public string Email { get; set; } = "";
+    public string CodeHash { get; set; } = "";
+    public string CodeSalt { get; set; } = "";
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime LastSentAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime ExpiresAtUtc { get; set; } = DateTime.UtcNow.AddMinutes(5);
+    public int FailedAttempts { get; set; }
+    public DateTime? UsedAtUtc { get; set; }
+}

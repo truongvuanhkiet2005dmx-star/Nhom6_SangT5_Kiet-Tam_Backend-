@@ -64,8 +64,7 @@ public class TransactionsController : ControllerBase
         }
         else if (year.HasValue)
         {
-            var startYear = new DateTime(year.Value, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-            var endYear = startYear.AddYears(1);
+            var (startYear, endYear) = VietnamTime.GetYearUtcRange(year.Value);
             query = query.Where(t => t.OccurredAtUtc >= startYear && t.OccurredAtUtc < endYear);
         }
         else if (month.HasValue)
@@ -84,11 +83,32 @@ public class TransactionsController : ControllerBase
             .Take(pageSize)
             .ToListAsync();
 
+        var creatorIds = entities.Select(t => t.UserId).Distinct().ToList();
+        var creatorNames = await _db.Users
+            .Where(u => creatorIds.Contains(u.Id))
+            .ToDictionaryAsync(u => u.Id, u => u.DisplayName);
+        var transactionFamilyIds = entities
+            .Where(t => t.FamilyGroupId.HasValue)
+            .Select(t => t.FamilyGroupId!.Value)
+            .Distinct()
+            .ToList();
+        var familyMemberNames = await _db.FamilyMembers
+            .AsNoTracking()
+            .Where(m => creatorIds.Contains(m.UserId) &&
+                        transactionFamilyIds.Contains(m.FamilyGroupId))
+            .Select(m => new { m.UserId, m.FamilyGroupId, m.DisplayName })
+            .ToListAsync();
+
         var transactions = entities.Select(t => new TransactionResponse
             {
                 Id = t.Id,
                 EventId = t.EventId,
                 FamilyGroupId = t.FamilyGroupId,
+                CreatorUserId = t.UserId,
+                CreatorDisplayName = familyMemberNames
+                    .FirstOrDefault(m => m.UserId == t.UserId &&
+                                         m.FamilyGroupId == t.FamilyGroupId)?.DisplayName ??
+                    creatorNames.GetValueOrDefault(t.UserId),
                 WalletId = t.WalletId,
                 ToWalletId = t.ToWalletId,
                 Amount = t.Amount,
@@ -546,6 +566,7 @@ public class TransactionsController : ControllerBase
             Id = transaction.Id,
             EventId = transaction.EventId,
             FamilyGroupId = transaction.FamilyGroupId,
+            CreatorUserId = transaction.UserId,
             WalletId = transaction.WalletId,
             ToWalletId = transaction.ToWalletId,
             Amount = transaction.Amount,
@@ -606,6 +627,8 @@ public class TransactionResponse
     public int Id { get; set; }
     public string EventId { get; set; } = "";
     public int? FamilyGroupId { get; set; }
+    public string CreatorUserId { get; set; } = "";
+    public string? CreatorDisplayName { get; set; }
     public int? WalletId { get; set; }
     public int? ToWalletId { get; set; }
     public long Amount { get; set; }

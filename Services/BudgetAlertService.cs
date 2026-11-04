@@ -26,9 +26,10 @@ public class BudgetAlertService
         var key = (familyGroupId, year, month);
         var gate = EvaluationLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync();
+        NotificationPlan? notification = null;
         try
         {
-            await EvaluateLockedAsync(familyGroupId, year, month);
+            notification = await EvaluateLockedAsync(familyGroupId, year, month);
         }
         catch (Exception exception)
         {
@@ -45,9 +46,26 @@ public class BudgetAlertService
         {
             gate.Release();
         }
+
+        if (notification != null)
+        {
+            try
+            {
+                await SendNotificationAsync(notification);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Không thể gửi cảnh báo ngân sách cho nhóm {FamilyGroupId}, tháng {Month}/{Year}.",
+                    familyGroupId,
+                    month,
+                    year);
+            }
+        }
     }
 
-    private async Task EvaluateLockedAsync(int familyGroupId, int year, int month)
+    private async Task<NotificationPlan?> EvaluateLockedAsync(int familyGroupId, int year, int month)
     {
         var budget = await _db.FamilyBudgets.FirstOrDefaultAsync(b =>
             b.FamilyGroupId == familyGroupId &&
@@ -55,7 +73,7 @@ public class BudgetAlertService
             b.Month == month);
 
         if (budget == null || budget.MonthlyLimit <= 0)
-            return;
+            return null;
 
         var (start, end) = VietnamTime.GetMonthUtcRange(year, month);
         var spent = await _db.FamilyTransactions
@@ -89,7 +107,7 @@ public class BudgetAlertService
             await _db.SaveChangesAsync();
 
         if (!_push.IsConfigured)
-            return;
+            return null;
 
         var memberUserIds = await _db.FamilyMembers
             .Where(m => m.FamilyGroupId == familyGroupId)
@@ -98,7 +116,7 @@ public class BudgetAlertService
             .ToListAsync();
 
         if (memberUserIds.Count == 0)
-            return;
+            return null;
 
         var tokens = await _db.DeviceTokens
             .Where(d => memberUserIds.Contains(d.UserId))
@@ -107,39 +125,82 @@ public class BudgetAlertService
             .ToListAsync();
 
         if (tokens.Count == 0)
-            return;
+            return null;
 
         if (spent >= budget.MonthlyLimit && !budget.Exceeded100Sent)
         {
-            var sent = await SendAsync(
-                tokens,
+            var claimed = await _db.FamilyBudgets
+                .Where(b => b.Id == budget.Id && !b.Exceeded100Sent)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(b => b.Exceeded100Sent, true)
+                    .SetProperty(b => b.Warning80Sent, true)) > 0;
+
+            if (!claimed)
+                return null;
+
+            return new NotificationPlan(
                 "Đã vượt hạn mức",
-                $"Nhóm đã chi {spent:N0} / {budget.MonthlyLimit:N0} cho tháng {month}/{year}.");
-
-            if (sent > 0)
-            {
-                budget.Exceeded100Sent = true;
-                budget.Warning80Sent = true;
-                await _db.SaveChangesAsync();
-            }
-
-            return;
+                $"Nhóm đã chi {spent:N0} / {budget.MonthlyLimit:N0} cho tháng {month}/{year}.",
+                tokens,
+                budget.Id,
+                Exceeded: true,
+                Warning: true);
         }
 
         if (spent >= budget.MonthlyLimit * 0.8m &&
             !budget.Warning80Sent &&
             !budget.Exceeded100Sent)
         {
-            var sent = await SendAsync(
-                tokens,
-                "Hạn mức gia đình sắp hết",
-                $"Nhóm đã sử dụng ít nhất 80% hạn mức tháng {month}/{year}.");
+            var claimed = await _db.FamilyBudgets
+                .Where(b => b.Id == budget.Id &&
+                            !b.Warning80Sent &&
+                            !b.Exceeded100Sent)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(b => b.Warning80Sent, true)) > 0;
 
-            if (sent > 0)
-            {
-                budget.Warning80Sent = true;
-                await _db.SaveChangesAsync();
-            }
+            if (!claimed)
+                return null;
+
+            return new NotificationPlan(
+                "Hạn mức gia đình sắp hết",
+                $"Nhóm đã sử dụng ít nhất 80% hạn mức tháng {month}/{year}.",
+                tokens,
+                budget.Id,
+                Exceeded: false,
+                Warning: true);
+        }
+
+        return null;
+    }
+
+    private async Task SendNotificationAsync(NotificationPlan notification)
+    {
+        var sent = await SendAsync(
+            notification.Tokens,
+            notification.Title,
+            notification.Body);
+
+        if (sent > 0)
+            return;
+
+        if (notification.Exceeded)
+        {
+            await _db.FamilyBudgets
+                .Where(b => b.Id == notification.BudgetId &&
+                            b.Exceeded100Sent &&
+                            b.Warning80Sent)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(b => b.Exceeded100Sent, false)
+                    .SetProperty(b => b.Warning80Sent, false));
+        }
+        else if (notification.Warning)
+        {
+            await _db.FamilyBudgets
+                .Where(b => b.Id == notification.BudgetId &&
+                            b.Warning80Sent &&
+                            !b.Exceeded100Sent)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(b => b.Warning80Sent, false));
         }
     }
 
@@ -171,4 +232,12 @@ public class BudgetAlertService
 
         return sent;
     }
+
+    private sealed record NotificationPlan(
+        string Title,
+        string Body,
+        IReadOnlyCollection<string> Tokens,
+        int BudgetId,
+        bool Exceeded,
+        bool Warning);
 }

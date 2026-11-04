@@ -14,13 +14,16 @@ public class AuthController : ControllerBase
 {
     private readonly UserManager<ApplicationUser> _users;
     private readonly JwtTokenService _jwtTokens;
+    private readonly OtpAuthService _otpAuth;
 
     public AuthController(
         UserManager<ApplicationUser> users,
-        JwtTokenService jwtTokens)
+        JwtTokenService jwtTokens,
+        OtpAuthService otpAuth)
     {
         _users = users;
         _jwtTokens = jwtTokens;
+        _otpAuth = otpAuth;
     }
 
     [HttpPost("register")]
@@ -103,6 +106,102 @@ public class AuthController : ControllerBase
         return Ok(await CreateResponse(user));
     }
 
+    [HttpPost("otp/request")]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> RequestOtp([FromBody] OtpRequestRequest request)
+    {
+        var email = NormalizeEmail(request.Email);
+        if (string.IsNullOrWhiteSpace(email))
+            return BadRequest("Email không hợp lệ.");
+
+        var result = await _otpAuth.RequestAsync(email);
+        if (result == OtpRequestResult.RetryLater)
+        {
+            return StatusCode(StatusCodes.Status429TooManyRequests, new
+            {
+                message = "Vui lòng chờ trước khi gửi lại mã OTP."
+            });
+        }
+        if (result == OtpRequestResult.DeliveryFailed)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+            {
+                message = "Không thể gửi mã OTP lúc này. Vui lòng thử lại sau."
+            });
+        }
+
+        return Ok(new
+        {
+            message = "Nếu email hợp lệ, mã OTP đã được gửi.",
+            expiresInSeconds = 300
+        });
+    }
+
+    [HttpPost("otp/verify")]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> VerifyOtp([FromBody] OtpVerifyRequest request)
+    {
+        var email = NormalizeEmail(request.Email);
+        if (string.IsNullOrWhiteSpace(email))
+            return BadRequest("Email không hợp lệ.");
+
+        var result = await _otpAuth.VerifyAsync(email, request.Otp ?? "");
+        if (!result.Succeeded)
+        {
+            if (result.Expired)
+                return BadRequest(new { message = "Mã OTP đã hết hạn. Vui lòng yêu cầu mã mới." });
+            if (result.Locked)
+                return StatusCode(StatusCodes.Status423Locked, new
+                {
+                    message = "Bạn đã nhập sai quá nhiều lần. Vui lòng yêu cầu mã OTP mới."
+                });
+            return Unauthorized(new { message = "Mã OTP không đúng." });
+        }
+
+        var user = await _users.FindByEmailAsync(email);
+        if (user == null)
+        {
+            var emailLocalPart = email.Split('@')[0].Trim('.');
+            var displayName = string.IsNullOrWhiteSpace(emailLocalPart)
+                ? "Người dùng"
+                : emailLocalPart[..Math.Min(emailLocalPart.Length, 100)];
+
+            user = new ApplicationUser
+            {
+                UserName = email,
+                Email = email,
+                NormalizedEmail = _users.NormalizeEmail(email),
+                NormalizedUserName = _users.NormalizeName(email),
+                EmailConfirmed = true,
+                DisplayName = displayName,
+                LockoutEnabled = true
+            };
+
+            var createResult = await _users.CreateAsync(user);
+            if (!createResult.Succeeded)
+            {
+                user = await _users.FindByEmailAsync(email);
+                if (user == null)
+                {
+                    return BadRequest(new
+                    {
+                        message = "Không thể tạo tài khoản.",
+                        errors = createResult.Errors.Select(x => x.Description).ToArray()
+                    });
+                }
+            }
+        }
+        else if (!user.EmailConfirmed)
+        {
+            user.EmailConfirmed = true;
+            var updateResult = await _users.UpdateAsync(user);
+            if (!updateResult.Succeeded)
+                return BadRequest(new { message = "Không thể xác nhận email." });
+        }
+
+        return Ok(await CreateResponse(user));
+    }
+
     [HttpGet("me")]
     [Microsoft.AspNetCore.Authorization.Authorize]
     public async Task<IActionResult> Me()
@@ -125,6 +224,11 @@ public class AuthController : ControllerBase
     {
         return await _jwtTokens.CreateResponseAsync(user);
     }
+
+    private static string NormalizeEmail(string? email)
+    {
+        return email?.Trim().ToLowerInvariant() ?? "";
+    }
 }
 
 public class RegisterRequest
@@ -146,4 +250,19 @@ public class LoginRequest
 
     [Required]
     public string Password { get; set; } = "";
+}
+
+public class OtpRequestRequest
+{
+    [Required, EmailAddress]
+    public string Email { get; set; } = "";
+}
+
+public class OtpVerifyRequest
+{
+    [Required, EmailAddress]
+    public string Email { get; set; } = "";
+
+    [Required]
+    public string Otp { get; set; } = "";
 }
