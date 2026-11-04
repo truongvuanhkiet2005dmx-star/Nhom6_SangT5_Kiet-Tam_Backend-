@@ -127,6 +127,12 @@ Endpoint OTP gồm:
 
 OTP 6 số dùng SHA-256 kết hợp salt ngẫu nhiên, hết hạn sau 5 phút, dùng một lần và giới hạn 5 lần nhập sai. Gửi lại bị chặn 60 giây cho cùng email.
 
+Các API quản lý mật khẩu và tài khoản gồm:
+
+- `POST /api/auth/password/reset` nhận `{ "email": "user@example.com", "otp": "123456", "newPassword": "<NEW_PASSWORD>" }`, không yêu cầu đăng nhập.
+- `POST /api/auth/password/change` nhận `{ "currentPassword": "<CURRENT_PASSWORD>", "newPassword": "<NEW_PASSWORD>" }`, yêu cầu JWT. Tài khoản đăng nhập bằng OTP hoặc Google có thể tạo mật khẩu mới mà không cần mật khẩu hiện tại.
+- `DELETE /api/auth/account` nhận `{ "password": "<PASSWORD>" }`, yêu cầu JWT. Mật khẩu bắt buộc với tài khoản đang có mật khẩu; chủ nhóm còn thành viên khác phải xóa nhóm hoặc thành viên trước khi xóa tài khoản.
+
 SMTP được cấu hình qua IConfiguration/User Secrets, không ghi mật khẩu vào file mẫu hay Git:
 
 ```powershell
