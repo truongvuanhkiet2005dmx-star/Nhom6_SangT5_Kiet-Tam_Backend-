@@ -118,6 +118,35 @@ public class AuthController : ControllerBase
         if (string.IsNullOrWhiteSpace(email))
             return BadRequest(new { message = "Email không hợp lệ." });
 
+        var passwordValidationUser = new ApplicationUser
+        {
+            UserName = email,
+            Email = email
+        };
+        var passwordErrors = new List<string>();
+        foreach (var validator in _users.PasswordValidators)
+        {
+            var validationResult = await validator.ValidateAsync(
+                _users,
+                passwordValidationUser,
+                request.NewPassword ?? "");
+
+            if (!validationResult.Succeeded)
+            {
+                passwordErrors.AddRange(
+                    validationResult.Errors.Select(error => error.Description));
+            }
+        }
+
+        if (passwordErrors.Count > 0)
+        {
+            return BadRequest(new
+            {
+                message = "Mật khẩu mới không hợp lệ.",
+                errors = passwordErrors
+            });
+        }
+
         var otpResult = await _otpAuth.VerifyAsync(email, request.Otp ?? "");
         if (!otpResult.Succeeded)
         {
