@@ -4,12 +4,6 @@ public static class VietnamTime
 {
     private static readonly TimeZoneInfo VietnamZone = GetVietnamZone();
 
-    public static DateTime GetUtcNow()
-    {
-        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, VietnamZone);
-        return TimeZoneInfo.ConvertTimeToUtc(local, VietnamZone);
-    }
-
     public static (int Year, int Month) GetCurrentYearMonth()
     {
         var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, VietnamZone);
