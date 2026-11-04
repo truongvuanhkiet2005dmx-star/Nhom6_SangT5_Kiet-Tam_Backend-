@@ -216,7 +216,7 @@ public class TransactionsController : ControllerBase
         if (existing != null)
         {
             if (TransactionsMatch(existing, request))
-                return Ok(existing);
+                return Ok(ToResponse(existing));
 
             return Conflict(new ProblemDetails
             {

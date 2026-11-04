@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using System.Net;
 using System.Threading.RateLimiting;
 using FirebaseAdmin;
 using FirebaseAdmin.Auth;
@@ -7,6 +8,7 @@ using Google.Apis.Auth.OAuth2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -21,6 +23,21 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddProblemDetails();
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders =
+        ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownProxies.Clear();
+    options.KnownNetworks.Clear();
+
+    foreach (var value in builder.Configuration
+        .GetSection("ForwardedHeaders:KnownProxies")
+        .Get<string[]>() ?? Array.Empty<string>())
+    {
+        if (IPAddress.TryParse(value.Trim(), out var proxyAddress))
+            options.KnownProxies.Add(proxyAddress);
+    }
+});
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -35,9 +52,10 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("auth", context =>
     {
         var key = GetPartitionKey(context);
+        var permitLimit = builder.Environment.IsDevelopment() ? 1000 : 10;
         return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
         {
-            PermitLimit = 10,
+            PermitLimit = permitLimit,
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0
         });
@@ -46,9 +64,10 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("join", context =>
     {
         var key = GetPartitionKey(context);
+        var permitLimit = builder.Environment.IsDevelopment() ? 1000 : 20;
         return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
         {
-            PermitLimit = 20,
+            PermitLimit = permitLimit,
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0
         });
@@ -197,6 +216,7 @@ builder.Services.AddSingleton(
     new PushNotificationService(firebaseMessaging));
 builder.Services.AddScoped<JwtTokenService>();
 builder.Services.AddScoped<BudgetAlertService>();
+builder.Services.AddScoped<WalletBalanceService>();
 
 builder.Services.AddSwaggerGen(options =>
 {
@@ -233,6 +253,8 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 var app = builder.Build();
+
+app.UseForwardedHeaders();
 
 app.UseExceptionHandler(errorApp =>
 {

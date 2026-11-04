@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SmartMoney.Api.Data;
 using SmartMoney.Api.Models;
+using SmartMoney.Api.Services;
 
 namespace SmartMoney.Api.Controllers;
 
@@ -14,10 +15,12 @@ public class WalletsController : ControllerBase
 {
     private const long MaxMoneyValue = 1_000_000_000_000L;
     private readonly AppDbContext _db;
+    private readonly WalletBalanceService _balances;
 
-    public WalletsController(AppDbContext db)
+    public WalletsController(AppDbContext db, WalletBalanceService balances)
     {
         _db = db;
+        _balances = balances;
     }
 
     // Lấy danh sách ví kèm số dư hiện tại
@@ -33,55 +36,21 @@ public class WalletsController : ControllerBase
             .OrderBy(w => w.Name)
             .ToListAsync();
 
-        var walletIds = wallets.Select(w => w.Id).ToList();
-        var transactions = await _db.FamilyTransactions
-            .AsNoTracking()
-            .Where(t => t.UserId == userId &&
-                        (t.WalletId.HasValue && walletIds.Contains(t.WalletId.Value) ||
-                         t.ToWalletId.HasValue && walletIds.Contains(t.ToWalletId.Value)))
-            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId, t.AdjustmentDirection })
-            .ToListAsync();
+        var balances = await _balances.CalculateCurrentBalancesAsync(wallets, userId);
 
-        var result = new List<object>();
+        var result = new List<WalletResponse>();
 
         foreach (var wallet in wallets)
         {
-            var income = transactions
-                .Where(t => t.Type == "income" && t.WalletId == wallet.Id)
-                .Sum(t => t.Amount);
-
-            var expense = transactions
-                .Where(t => t.Type == "expense" && t.WalletId == wallet.Id)
-                .Sum(t => t.Amount);
-
-            var transferOut = transactions
-                .Where(t => t.Type == "transfer" && t.WalletId == wallet.Id)
-                .Sum(t => t.Amount);
-
-            var transferIn = transactions
-                .Where(t => t.Type == "transfer" && t.ToWalletId == wallet.Id)
-                .Sum(t => t.Amount);
-
-            var adjustmentIncrease = transactions
-                .Where(t => t.Type == "adjustment" &&
-                            t.WalletId == wallet.Id &&
-                            t.AdjustmentDirection == "increase")
-                .Sum(t => t.Amount);
-
-            var adjustmentDecrease = transactions
-                .Where(t => t.Type == "adjustment" &&
-                            t.WalletId == wallet.Id &&
-                            t.AdjustmentDirection == "decrease")
-                .Sum(t => t.Amount);
-
-            result.Add(new
+            result.Add(new WalletResponse
             {
-                wallet.Id,
-                wallet.Name,
-                wallet.Type,
-                wallet.InitialBalance,
-                CurrentBalance = wallet.InitialBalance + income - expense - transferOut + transferIn + adjustmentIncrease - adjustmentDecrease,
-                wallet.CreatedAtUtc
+                Id = wallet.Id,
+                Name = wallet.Name,
+                Type = wallet.Type,
+                InitialBalance = wallet.InitialBalance,
+                CurrentBalance = balances[wallet.Id],
+                ClientId = wallet.ClientId,
+                CreatedAtUtc = wallet.CreatedAtUtc
             });
         }
 
@@ -102,48 +71,16 @@ public class WalletsController : ControllerBase
         if (wallet == null)
             return NotFound("Không tìm thấy ví.");
 
-        var transactions = await _db.FamilyTransactions
-            .Where(t => t.UserId == userId &&
-                        (t.WalletId == wallet.Id || t.ToWalletId == wallet.Id))
-            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId, t.AdjustmentDirection })
-            .ToListAsync();
-
-        var income = transactions
-            .Where(t => t.Type == "income" && t.WalletId == wallet.Id)
-            .Sum(t => t.Amount);
-
-        var expense = transactions
-            .Where(t => t.Type == "expense" && t.WalletId == wallet.Id)
-            .Sum(t => t.Amount);
-
-        var transferOut = transactions
-            .Where(t => t.Type == "transfer" && t.WalletId == wallet.Id)
-            .Sum(t => t.Amount);
-
-        var transferIn = transactions
-            .Where(t => t.Type == "transfer" && t.ToWalletId == wallet.Id)
-            .Sum(t => t.Amount);
-
-        var adjustmentIncrease = transactions
-            .Where(t => t.Type == "adjustment" &&
-                        t.WalletId == wallet.Id &&
-                        t.AdjustmentDirection == "increase")
-            .Sum(t => t.Amount);
-
-        var adjustmentDecrease = transactions
-            .Where(t => t.Type == "adjustment" &&
-                        t.WalletId == wallet.Id &&
-                        t.AdjustmentDirection == "decrease")
-            .Sum(t => t.Amount);
-
-        return Ok(new
+        var currentBalance = await _balances.CalculateCurrentBalanceAsync(wallet, userId);
+        return Ok(new WalletResponse
         {
-            wallet.Id,
-            wallet.Name,
-            wallet.Type,
-            wallet.InitialBalance,
-            CurrentBalance = wallet.InitialBalance + income - expense - transferOut + transferIn + adjustmentIncrease - adjustmentDecrease,
-            wallet.CreatedAtUtc
+            Id = wallet.Id,
+            Name = wallet.Name,
+            Type = wallet.Type,
+            InitialBalance = wallet.InitialBalance,
+            CurrentBalance = currentBalance,
+            ClientId = wallet.ClientId,
+            CreatedAtUtc = wallet.CreatedAtUtc
         });
     }
 
@@ -157,8 +94,6 @@ public class WalletsController : ControllerBase
 
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest("Tên ví không được để trống.");
-        if (request.Name.Trim().Length > 100)
-            return BadRequest("Tên ví không được vượt quá 100 ký tự.");
 
         if (string.IsNullOrWhiteSpace(request.Type))
             return BadRequest("Type là bắt buộc khi tạo ví.");
@@ -195,7 +130,16 @@ public class WalletsController : ControllerBase
                         Title = "ClientId trùng nhưng dữ liệu ví khác",
                         Detail = "ClientId đã được đồng bộ với một ví có dữ liệu khác."
                     });
-                return Ok(existing);
+                return Ok(new WalletResponse
+                {
+                    Id = existing.Id,
+                    Name = existing.Name,
+                    Type = existing.Type,
+                    InitialBalance = existing.InitialBalance,
+                    CurrentBalance = await _balances.CalculateCurrentBalanceAsync(existing, userId),
+                    ClientId = existing.ClientId,
+                    CreatedAtUtc = existing.CreatedAtUtc
+                });
             }
         }
 
@@ -222,20 +166,29 @@ public class WalletsController : ControllerBase
                 var concurrent = await _db.Wallets.AsNoTracking()
                     .FirstOrDefaultAsync(w => w.UserId == userId && w.ClientId == clientId);
                 if (concurrent != null)
-                    return Ok(concurrent);
+                    return Ok(new WalletResponse
+                    {
+                        Id = concurrent.Id,
+                        Name = concurrent.Name,
+                        Type = concurrent.Type,
+                        InitialBalance = concurrent.InitialBalance,
+                        CurrentBalance = await _balances.CalculateCurrentBalanceAsync(concurrent, userId),
+                        ClientId = concurrent.ClientId,
+                        CreatedAtUtc = concurrent.CreatedAtUtc
+                    });
             }
             throw;
         }
 
-        return Ok(new
+        return Ok(new WalletResponse
         {
-            wallet.Id,
-            wallet.Name,
-            wallet.Type,
-            wallet.InitialBalance,
+            Id = wallet.Id,
+            Name = wallet.Name,
+            Type = wallet.Type,
+            InitialBalance = wallet.InitialBalance,
             CurrentBalance = wallet.InitialBalance,
-            wallet.ClientId,
-            wallet.CreatedAtUtc
+            ClientId = wallet.ClientId,
+            CreatedAtUtc = wallet.CreatedAtUtc
         });
     }
 
@@ -296,42 +249,17 @@ public class WalletsController : ControllerBase
 
         await _db.SaveChangesAsync();
 
-        var transactions = await _db.FamilyTransactions
-            .AsNoTracking()
-            .Where(t => t.UserId == userId &&
-                        (t.WalletId == id || t.ToWalletId == id))
-            .Select(t => new { t.Amount, t.Type, t.WalletId, t.ToWalletId, t.AdjustmentDirection })
-            .ToListAsync();
+        var currentBalance = await _balances.CalculateCurrentBalanceAsync(wallet, userId);
 
-        var currentBalance =
-            wallet.InitialBalance +
-            transactions
-                .Where(t => t.Type == "income" && t.WalletId == id)
-                .Sum(t => t.Amount) -
-            transactions
-                .Where(t => t.Type == "expense" && t.WalletId == id)
-                .Sum(t => t.Amount) -
-            transactions
-                .Where(t => t.Type == "transfer" && t.WalletId == id)
-                .Sum(t => t.Amount) +
-            transactions
-                .Where(t => t.Type == "transfer" && t.ToWalletId == id)
-                .Sum(t => t.Amount) +
-            transactions
-                .Where(t => t.Type == "adjustment" && t.WalletId == id && t.AdjustmentDirection == "increase")
-                .Sum(t => t.Amount) -
-            transactions
-                .Where(t => t.Type == "adjustment" && t.WalletId == id && t.AdjustmentDirection == "decrease")
-                .Sum(t => t.Amount);
-
-        return Ok(new
+        return Ok(new WalletResponse
         {
-            wallet.Id,
-            wallet.Name,
-            wallet.Type,
-            wallet.InitialBalance,
+            Id = wallet.Id,
+            Name = wallet.Name,
+            Type = wallet.Type,
+            InitialBalance = wallet.InitialBalance,
             CurrentBalance = currentBalance,
-            wallet.CreatedAtUtc
+            ClientId = wallet.ClientId,
+            CreatedAtUtc = wallet.CreatedAtUtc
         });
     }
 
@@ -374,4 +302,15 @@ public class WalletRequest
     public string? Type { get; set; }
     public long? InitialBalance { get; set; }
     public string? ClientId { get; set; }
+}
+
+public class WalletResponse
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public string Type { get; set; } = "";
+    public long InitialBalance { get; set; }
+    public long CurrentBalance { get; set; }
+    public string? ClientId { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
 }

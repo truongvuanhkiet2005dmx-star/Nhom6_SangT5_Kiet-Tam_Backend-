@@ -39,7 +39,7 @@ public class AuthController : ControllerBase
         {
             UserName = email,
             Email = email,
-            EmailConfirmed = true,
+            EmailConfirmed = false,
             DisplayName = displayName,
             LockoutEnabled = true
         };

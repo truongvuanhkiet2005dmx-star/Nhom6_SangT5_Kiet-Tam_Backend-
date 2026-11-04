@@ -53,7 +53,7 @@ Không dùng `AllowAnyOrigin` với credentials. Swagger mặc định chỉ b�
 
 ## EF Core migrations
 
-Các migration liên quan hiện có: `AddAdjustmentDirection` cho điều chỉnh số dư ví và `AddWalletClientIdAndTokenOwnership` cho `clientId` idempotency cùng ownership duy nhất của FCM token. Chỉ Development mới tự chạy migration khi khởi động. Production phải chạy migration bằng pipeline hoặc:
+Migration mới nhất thay đổi schema là `AddAdjustmentDirection`. Các migration liên quan khác gồm `AddTransferWallet` và `AddWalletClientIdAndTokenOwnership`; `EnableLockoutForExistingUsers` là migration data-only, chỉ bật `LockoutEnabled` cho tài khoản hiện có. Production phải chạy migration bằng pipeline hoặc chạy thủ công lệnh dưới đây.
 
 ```powershell
 dotnet ef database update --project Backend_Nhom6_Kiet&Tam_App_QuanLyChiTieu.csproj
@@ -101,10 +101,11 @@ Giao dịch điều chỉnh dùng:
 
 ## Xác thực Google và tài khoản
 
-Backend đăng ký tài khoản email/mật khẩu với `EmailConfirmed=true` vì API hiện chưa triển khai luồng xác minh email riêng. Google đăng nhập qua Firebase ID token và chỉ chấp nhận email có `email_verified=true`. Backend chỉ cấp JWT Google sau khi đã có liên kết ASP.NET Identity `Firebase/<Firebase UID>`:
+Backend hiện chưa triển khai email verification flow, vì vậy tài khoản đăng ký email/mật khẩu và tài khoản Google mới giữ `EmailConfirmed=false`; ứng dụng demo local không xem trường này là xác nhận email hoàn chỉnh. Google đăng nhập qua Firebase ID token và chỉ chấp nhận email có `email_verified=true`. Backend chỉ cấp JWT Google sau khi đã có liên kết ASP.NET Identity `Firebase/<Firebase UID>`:
 
 - Google lần đầu tạo tài khoản và liên kết Firebase UID trong cùng luồng, sau đó trả JWT.
 - Nếu email đã tồn tại nhưng chưa có liên kết Firebase UID phù hợp, API trả `409` và không cấp JWT chỉ dựa trên email.
+- Tài khoản cũ có thể liên kết an toàn bằng `POST /api/auth/google/link` khi đã đăng nhập bằng JWT backend; Firebase ID token phải có email verified và email trùng tài khoản hiện tại.
 - Không ghép tài khoản Google với tài khoản mật khẩu chỉ vì email trùng.
 
 Đăng nhập mật khẩu dùng Identity lockout, tối đa 5 lần sai trong 15 phút cho mỗi tài khoản. API trả `423` khi tài khoản bị khóa và `401` với thông điệp đăng nhập lại khi thông tin sai hoặc token hết hạn. JWT hiện không có refresh token.

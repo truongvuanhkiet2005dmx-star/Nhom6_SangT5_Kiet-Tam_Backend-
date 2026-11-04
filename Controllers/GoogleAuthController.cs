@@ -2,6 +2,8 @@ using FirebaseAdmin.Auth;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Authorization;
+using System.Security.Claims;
 using SmartMoney.Api.Models;
 using SmartMoney.Api.Services;
 
@@ -98,7 +100,9 @@ public class GoogleAuthController : ControllerBase
         {
             UserName = normalizedEmail,
             Email = normalizedEmail,
-            EmailConfirmed = true,
+            // No backend email-verification flow is implemented. Firebase verification of
+            // a Google token is authentication proof, not a verified address for Identity.
+            EmailConfirmed = false,
             DisplayName = string.IsNullOrWhiteSpace(normalizedDisplayName)
                 ? normalizedEmail
                 : normalizedDisplayName,
@@ -138,6 +142,79 @@ public class GoogleAuthController : ControllerBase
         }
 
         return Ok(await _jwtTokens.CreateResponseAsync(newUser));
+    }
+
+    [HttpPost("google/link")]
+    [Authorize]
+    public async Task<IActionResult> LinkGoogle([FromBody] GoogleLoginRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.IdToken))
+            return BadRequest("Firebase ID token không được để trống.");
+
+        var firebaseAuth = _services.GetService<FirebaseAuth>();
+        if (firebaseAuth == null)
+            return StatusCode(503, "Backend chưa cấu hình Firebase service account.");
+
+        FirebaseToken decodedToken;
+        try
+        {
+            decodedToken = await firebaseAuth.VerifyIdTokenAsync(request.IdToken);
+        }
+        catch
+        {
+            return Unauthorized("Firebase ID token không hợp lệ hoặc đã hết hạn.");
+        }
+
+        var emailVerified = decodedToken.Claims.TryGetValue("email_verified", out var verifiedValue)
+            && (verifiedValue is true ||
+                string.Equals(verifiedValue?.ToString(), "true", StringComparison.OrdinalIgnoreCase));
+        if (!emailVerified)
+            return Unauthorized("Email của tài khoản Google chưa được xác minh.");
+
+        var firebaseEmail = decodedToken.Claims.TryGetValue("email", out var emailValue)
+            ? emailValue?.ToString()?.Trim()
+            : null;
+        if (string.IsNullOrWhiteSpace(firebaseEmail))
+            return Unauthorized("Firebase token không có email.");
+
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrWhiteSpace(userId))
+            return Unauthorized();
+
+        var user = await _userManager.FindByIdAsync(userId);
+        if (user == null)
+            return Unauthorized();
+        if (!string.Equals(user.Email?.Trim(), firebaseEmail, StringComparison.OrdinalIgnoreCase))
+            return Conflict("Email Firebase không khớp tài khoản backend đang đăng nhập.");
+
+        var firebaseUid = decodedToken.Uid;
+        if (string.IsNullOrWhiteSpace(firebaseUid))
+            return Unauthorized("Firebase ID token không chứa UID hợp lệ.");
+
+        const string provider = "Firebase";
+        var uidOwner = await _userManager.FindByLoginAsync(provider, firebaseUid);
+        if (uidOwner != null && uidOwner.Id != user.Id)
+            return Conflict("Firebase UID này đã được liên kết với tài khoản khác.");
+        if (uidOwner != null)
+            return Ok(new { message = "Tài khoản đã được liên kết Google.", linked = true });
+
+        var loginResult = await _userManager.AddLoginAsync(
+            user,
+            new UserLoginInfo(provider, firebaseUid, "Firebase"));
+        if (!loginResult.Succeeded)
+        {
+            var racedOwner = await _userManager.FindByLoginAsync(provider, firebaseUid);
+            if (racedOwner?.Id == user.Id)
+                return Ok(new { message = "Tài khoản đã được liên kết Google.", linked = true });
+
+            return Conflict(new
+            {
+                message = "Không thể liên kết Firebase UID.",
+                errors = loginResult.Errors.Select(error => error.Description)
+            });
+        }
+
+        return Ok(new { message = "Liên kết Google thành công.", linked = true });
     }
 }
 
