@@ -36,6 +36,7 @@ public class FamiliesController : ControllerBase
                 g.Name,
                 g.InviteCode,
                 g.CreatedAtUtc,
+                IsOwner = g.OwnerUserId == userId,
                 Members = g.Members.Select(m => new
                 {
                     m.UserId,
