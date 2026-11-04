@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using System.Threading.RateLimiting;
 using FirebaseAdmin;
 using FirebaseAdmin.Auth;
 using FirebaseAdmin.Messaging;
@@ -23,15 +24,34 @@ builder.Services.AddProblemDetails();
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddFixedWindowLimiter("auth", limiter =>
+    string GetPartitionKey(HttpContext context)
     {
-        limiter.PermitLimit = 10;
-        limiter.Window = TimeSpan.FromMinutes(1);
+        var remoteIp = context.Connection.RemoteIpAddress;
+        if (remoteIp == null || System.Net.IPAddress.IsLoopback(remoteIp))
+            return "loopback";
+        return remoteIp.ToString();
+    }
+
+    options.AddPolicy("auth", context =>
+    {
+        var key = GetPartitionKey(context);
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        });
     });
-    options.AddFixedWindowLimiter("join", limiter =>
+
+    options.AddPolicy("join", context =>
     {
-        limiter.PermitLimit = 20;
-        limiter.Window = TimeSpan.FromMinutes(1);
+        var key = GetPartitionKey(context);
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        });
     });
 });
 
@@ -93,6 +113,10 @@ builder.Services
 
 var jwtKey = builder.Configuration["Jwt:Key"]
     ?? throw new InvalidOperationException("Thiếu cấu hình Jwt:Key.");
+var jwtKeyBytes = Encoding.UTF8.GetBytes(jwtKey);
+if (jwtKeyBytes.Length < 32)
+    throw new InvalidOperationException(
+        "Jwt:Key phải có ít nhất 32 byte khi mã hóa UTF-8 để dùng HS256.");
 
 var jwtIssuer = builder.Configuration["Jwt:Issuer"];
 var jwtAudience = builder.Configuration["Jwt:Audience"];

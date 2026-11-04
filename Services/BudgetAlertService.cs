@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using SmartMoney.Api.Data;
 
@@ -5,7 +6,7 @@ namespace SmartMoney.Api.Services;
 
 public class BudgetAlertService
 {
-    private static readonly SemaphoreSlim EvaluationLock = new(1, 1);
+    private static readonly ConcurrentDictionary<(int FamilyGroupId, int Year, int Month), SemaphoreSlim> EvaluationLocks = new();
     private readonly AppDbContext _db;
     private readonly PushNotificationService _push;
     private readonly ILogger<BudgetAlertService> _logger;
@@ -22,7 +23,9 @@ public class BudgetAlertService
 
     public async Task EvaluateAsync(int familyGroupId, int year, int month)
     {
-        await EvaluationLock.WaitAsync();
+        var key = (familyGroupId, year, month);
+        var gate = EvaluationLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
         try
         {
             await EvaluateLockedAsync(familyGroupId, year, month);
@@ -40,7 +43,7 @@ public class BudgetAlertService
         }
         finally
         {
-            EvaluationLock.Release();
+            gate.Release();
         }
     }
 

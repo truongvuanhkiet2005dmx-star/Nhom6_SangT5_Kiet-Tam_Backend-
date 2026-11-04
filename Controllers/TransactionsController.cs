@@ -70,18 +70,21 @@ public class TransactionsController : ControllerBase
         }
         else if (month.HasValue)
         {
-            var currentYear = DateTime.UtcNow.Year;
+            var currentYear = VietnamTime.GetCurrentYearMonth().Year;
             var (start, end) = VietnamTime.GetMonthUtcRange(currentYear, month.Value);
             query = query.Where(t => t.OccurredAtUtc >= start && t.OccurredAtUtc < end);
         }
         if (page < 1 || pageSize < 1 || pageSize > 500)
             return BadRequest("Page phải từ 1 và PageSize từ 1 đến 500.");
 
-        var transactions = await query
+        var entities = await query
             .OrderByDescending(t => t.OccurredAtUtc)
+            .ThenByDescending(t => t.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .Select(t => new TransactionResponse
+            .ToListAsync();
+
+        var transactions = entities.Select(t => new TransactionResponse
             {
                 Id = t.Id,
                 EventId = t.EventId,
@@ -95,10 +98,12 @@ public class TransactionsController : ControllerBase
                 Source = t.Source,
                 BankName = t.BankName,
                 PackageName = t.PackageName,
-                OccurredAtUtc = t.OccurredAtUtc,
+                OccurredAtUtc = new DateTimeOffset(
+                    DateTime.SpecifyKind(t.OccurredAtUtc, DateTimeKind.Utc),
+                    TimeSpan.Zero),
                 Note = t.Note
             })
-            .ToListAsync();
+            .ToList();
 
         return Ok(transactions);
     }
@@ -260,7 +265,7 @@ public class TransactionsController : ControllerBase
             if (concurrentExisting != null)
             {
                 if (TransactionsMatch(concurrentExisting, request))
-                    return Ok(concurrentExisting);
+                    return Ok(ToResponse(concurrentExisting));
 
                 return Conflict(new ProblemDetails
                 {
@@ -291,7 +296,7 @@ public class TransactionsController : ControllerBase
             }
         }
 
-        return Ok(transaction);
+        return Ok(ToResponse(transaction));
     }
 
     private static bool TransactionsMatch(
@@ -494,7 +499,7 @@ public class TransactionsController : ControllerBase
             }
         }
 
-        return Ok(transaction);
+        return Ok(ToResponse(transaction));
     }
 
     // Xóa giao dịch của chính mình
@@ -532,6 +537,29 @@ public class TransactionsController : ControllerBase
         }
 
         return NoContent();
+    }
+
+    private static TransactionResponse ToResponse(FamilyTransaction transaction)
+    {
+        return new TransactionResponse
+        {
+            Id = transaction.Id,
+            EventId = transaction.EventId,
+            FamilyGroupId = transaction.FamilyGroupId,
+            WalletId = transaction.WalletId,
+            ToWalletId = transaction.ToWalletId,
+            Amount = transaction.Amount,
+            Type = transaction.Type,
+            AdjustmentDirection = transaction.AdjustmentDirection,
+            CategoryName = transaction.CategoryName,
+            Source = transaction.Source,
+            BankName = transaction.BankName,
+            PackageName = transaction.PackageName,
+            OccurredAtUtc = new DateTimeOffset(
+                DateTime.SpecifyKind(transaction.OccurredAtUtc, DateTimeKind.Utc),
+                TimeSpan.Zero),
+            Note = transaction.Note
+        };
     }
 
     private static bool IsValidOccurredAtUtc(DateTimeOffset occurredAtUtc)
@@ -587,6 +615,6 @@ public class TransactionResponse
     public string Source { get; set; } = "";
     public string BankName { get; set; } = "";
     public string PackageName { get; set; } = "";
-    public DateTime OccurredAtUtc { get; set; }
+    public DateTimeOffset OccurredAtUtc { get; set; }
     public string Note { get; set; } = "";
 }

@@ -4,7 +4,23 @@ public static class VietnamTime
 {
     private static readonly TimeZoneInfo VietnamZone = GetVietnamZone();
 
-    public static DateTime GetUtcNow() => DateTime.UtcNow;
+    public static DateTime GetUtcNow()
+    {
+        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, VietnamZone);
+        return TimeZoneInfo.ConvertTimeToUtc(local, VietnamZone);
+    }
+
+    public static (int Year, int Month) GetCurrentYearMonth()
+    {
+        var local = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, VietnamZone);
+        return (local.Year, local.Month);
+    }
+
+    public static DateTime ToVietnamDateTimeUtc(DateTime utcValue)
+    {
+        var valueUtc = NormalizeUtc(utcValue);
+        return TimeZoneInfo.ConvertTimeFromUtc(valueUtc, VietnamZone);
+    }
 
     public static (DateTime StartUtc, DateTime EndUtc) GetMonthUtcRange(int year, int month)
     {

@@ -98,3 +98,26 @@ Giao dịch điều chỉnh dùng:
 ```
 
 `amount` phải lớn hơn 0. `adjustmentDirection` chỉ nhận `increase` hoặc `decrease`. Điều chỉnh chỉ cập nhật ví được xác định bởi `walletId`; không tính vào income, expense, breakdown báo cáo hoặc cảnh báo ngân sách. `eventId` vẫn được áp dụng idempotency giống các loại giao dịch khác.
+
+## Xác thực Google và tài khoản
+
+Backend đăng ký tài khoản email/mật khẩu với `EmailConfirmed=true` vì API hiện chưa triển khai luồng xác minh email riêng. Google đăng nhập qua Firebase ID token và chỉ chấp nhận email có `email_verified=true`. Backend chỉ cấp JWT Google sau khi đã có liên kết ASP.NET Identity `Firebase/<Firebase UID>`:
+
+- Google lần đầu tạo tài khoản và liên kết Firebase UID trong cùng luồng, sau đó trả JWT.
+- Nếu email đã tồn tại nhưng chưa có liên kết Firebase UID phù hợp, API trả `409` và không cấp JWT chỉ dựa trên email.
+- Không ghép tài khoản Google với tài khoản mật khẩu chỉ vì email trùng.
+
+Đăng nhập mật khẩu dùng Identity lockout, tối đa 5 lần sai trong 15 phút cho mỗi tài khoản. API trả `423` khi tài khoản bị khóa và `401` với thông điệp đăng nhập lại khi thông tin sai hoặc token hết hạn. JWT hiện không có refresh token.
+
+Rate limiting login/register/google/join được phân vùng theo IP; một IP không làm ảnh hưởng hoàn toàn đến IP khác. Khi chạy sau reverse proxy, cấu hình forwarded headers đúng để lấy IP thực; ở một số môi trường serverless/multi-instance giới hạn theo bộ nhớ vẫn có thể khác nhau giữa các instance.
+
+`OccurredAtUtc` được chuẩn hóa sang UTC, đầu ra transaction sử dụng `DateTimeOffset` theo offset `+00:00`. Mốc báo cáo, ngân sách và nhóm ngày hàng tháng dùng múi giờ Việt Nam (UTC+7), không phụ thuộc múi giờ máy chủ.
+
+## Kiểm thử
+
+Chạy build và test:
+
+```powershell
+dotnet build Backend_Nhom6_Kiet&Tam_App_QuanLyChiTieu.csproj
+dotnet test SmartMoney.Api.Tests/SmartMoney.Api.Tests.csproj
+```

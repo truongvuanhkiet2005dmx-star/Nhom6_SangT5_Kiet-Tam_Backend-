@@ -69,41 +69,75 @@ public class GoogleAuthController : ControllerBase
         if (!emailVerified)
             return Unauthorized("Email của tài khoản Google chưa được xác minh.");
 
-        var user = await _userManager.FindByEmailAsync(email);
-        var normalizedDisplayName = displayName?.Trim() ?? "";
+        var firebaseUid = decodedToken.Uid;
+        if (string.IsNullOrWhiteSpace(firebaseUid))
+            return Unauthorized("Firebase ID token không chứa UID hợp lệ.");
 
-        if (user == null)
+        const string provider = "Firebase";
+        var linkedUser = await _userManager.FindByLoginAsync(provider, firebaseUid);
+        if (linkedUser != null)
         {
-            user = new ApplicationUser
-            {
-                UserName = email,
-                Email = email,
-                EmailConfirmed = true,
-                DisplayName = string.IsNullOrWhiteSpace(normalizedDisplayName)
-                    ? email
-                    : normalizedDisplayName
-            };
+            if (!string.Equals(linkedUser.Email?.Trim(), email.Trim(), StringComparison.OrdinalIgnoreCase))
+                return Conflict("Liên kết Google không khớp email của tài khoản.");
 
-            var createResult = await _userManager.CreateAsync(user);
+            return Ok(await _jwtTokens.CreateResponseAsync(linkedUser));
+        }
 
-            if (!createResult.Succeeded)
-            {
-                return Conflict(new
-                {
-                    message = "Không thể tạo tài khoản Google hoặc email đã được đăng ký đồng thời. Không tự động liên kết tài khoản.",
-                    errors = createResult.Errors.Select(e => e.Description)
-                });
-            }
-        else
+        var normalizedEmail = email.Trim().ToLowerInvariant();
+        var existingUser = await _userManager.FindByEmailAsync(normalizedEmail);
+        if (existingUser != null)
         {
             return Conflict(new
             {
-                message = "Email này đã tồn tại. Liên kết tài khoản Google bằng mật khẩu chưa được hỗ trợ trong phiên bản này."
+                message = "Email đã tồn tại nhưng chưa được liên kết an toàn với tài khoản Google. Không cấp JWT chỉ dựa trên email."
             });
         }
+
+        var normalizedDisplayName = displayName?.Trim() ?? "";
+        var newUser = new ApplicationUser
+        {
+            UserName = normalizedEmail,
+            Email = normalizedEmail,
+            EmailConfirmed = true,
+            DisplayName = string.IsNullOrWhiteSpace(normalizedDisplayName)
+                ? normalizedEmail
+                : normalizedDisplayName,
+            LockoutEnabled = true
+        };
+
+        var createResult = await _userManager.CreateAsync(newUser);
+        if (!createResult.Succeeded)
+        {
+            var racedUser = await _userManager.FindByEmailAsync(normalizedEmail);
+            var racedLogin = await _userManager.FindByLoginAsync(provider, firebaseUid);
+            if (racedUser != null && racedLogin?.Id == racedUser.Id)
+                return Ok(await _jwtTokens.CreateResponseAsync(racedUser));
+
+            return Conflict(new
+            {
+                message = "Không thể xác minh liên kết Google tài khoản. Không cấp JWT chỉ dựa trên email.",
+                errors = createResult.Errors.Select(error => error.Description)
+            });
         }
 
-        return Ok(await _jwtTokens.CreateResponseAsync(user));
+        var loginResult = await _userManager.AddLoginAsync(
+            newUser,
+            new UserLoginInfo(provider, firebaseUid, "Firebase"));
+
+        if (!loginResult.Succeeded)
+        {
+            var verifiedLogin = await _userManager.FindByLoginAsync(provider, firebaseUid);
+            if (verifiedLogin?.Id == newUser.Id)
+                return Ok(await _jwtTokens.CreateResponseAsync(verifiedLogin));
+
+            return Conflict(new
+            {
+                message = "Tài khoản đã được tạo nhưng liên kết Firebase UID thất bại. Không cấp JWT.",
+                errors = loginResult.Errors.Select(error => error.Description)
+            });
+        }
+
+        return Ok(await _jwtTokens.CreateResponseAsync(newUser));
     }
 }
 

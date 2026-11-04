@@ -39,8 +39,9 @@ public class AuthController : ControllerBase
         {
             UserName = email,
             Email = email,
-            EmailConfirmed = false,
-            DisplayName = displayName
+            EmailConfirmed = true,
+            DisplayName = displayName,
+            LockoutEnabled = true
         };
 
         var result = await _users.CreateAsync(user, request.Password);
@@ -78,9 +79,22 @@ public class AuthController : ControllerBase
             });
         }
 
-        if (!await _users.CheckPasswordAsync(user, request.Password))
+        var signIn = HttpContext.RequestServices.GetRequiredService<SignInManager<ApplicationUser>>();
+        var signInResult = await signIn.CheckPasswordSignInAsync(
+            user,
+            request.Password,
+            lockoutOnFailure: true);
+
+        if (signInResult.IsLockedOut)
         {
-            await _users.AccessFailedAsync(user);
+            return StatusCode(StatusCodes.Status423Locked, new
+            {
+                message = "Tài khoản tạm thời bị khóa do nhập sai mật khẩu nhiều lần."
+            });
+        }
+
+        if (!signInResult.Succeeded)
+        {
             return Unauthorized(new { message = "Email hoặc mật khẩu không đúng." });
         }
 

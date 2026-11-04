@@ -31,8 +31,9 @@ public class ReportsController : ControllerBase
         if (string.IsNullOrEmpty(userId))
             return Unauthorized();
 
-        var reportYear = year ?? DateTime.UtcNow.Year;
-        var reportMonth = month ?? DateTime.UtcNow.Month;
+        var current = VietnamTime.GetCurrentYearMonth();
+        var reportYear = year ?? current.Year;
+        var reportMonth = month ?? current.Month;
 
         if (reportYear < 2000 || reportYear > 2100)
             return BadRequest("Năm phải nằm trong khoảng từ 2000 đến 2100.");
@@ -117,7 +118,7 @@ public class ReportsController : ControllerBase
         };
 
         var daily = transactions
-            .GroupBy(t => t.OccurredAtUtc.Date)
+            .GroupBy(t => VietnamTime.ToVietnamDateTimeUtc(t.OccurredAtUtc).Date)
             .Select(group => new
             {
                 date = group.Key,

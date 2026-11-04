@@ -16,7 +16,6 @@ public class BudgetsController : ControllerBase
     private const long MaxMoneyValue = 1_000_000_000_000L;
     private const int MinYear = 2000;
     private const int MaxYear = 2100;
-    private static readonly SemaphoreSlim BudgetLock = new(1, 1);
     private readonly AppDbContext _db;
     private readonly BudgetAlertService _alerts;
     private readonly ILogger<BudgetsController> _logger;
@@ -50,8 +49,9 @@ public class BudgetsController : ControllerBase
         if (!isMember)
             return Forbid();
 
-        var budgetYear = year ?? DateTime.UtcNow.Year;
-        var budgetMonth = month ?? DateTime.UtcNow.Month;
+        var current = VietnamTime.GetCurrentYearMonth();
+        var budgetYear = year ?? current.Year;
+        var budgetMonth = month ?? current.Month;
 
         if (budgetYear < MinYear || budgetYear > MaxYear)
             return BadRequest("Năm phải nằm trong khoảng từ 2000 đến 2100.");
@@ -132,92 +132,77 @@ public class BudgetsController : ControllerBase
         if (!string.Equals(member.AccessRole, "Owner", StringComparison.OrdinalIgnoreCase))
             return Forbid();
 
-        await BudgetLock.WaitAsync();
+        var budget = await _db.FamilyBudgets.FirstOrDefaultAsync(b =>
+            b.FamilyGroupId == familyGroupId &&
+            b.Year == request.Year &&
+            b.Month == request.Month);
+
+        if (budget == null)
+        {
+            budget = new FamilyBudget
+            {
+                FamilyGroupId = familyGroupId,
+                Year = request.Year,
+                Month = request.Month,
+                MonthlyLimit = request.MonthlyLimit,
+                Warning80Sent = false,
+                Exceeded100Sent = false
+            };
+
+            _db.FamilyBudgets.Add(budget);
+        }
+        else
+        {
+            budget.MonthlyLimit = request.MonthlyLimit;
+        }
+
         try
         {
-            var budget = await _db.FamilyBudgets.FirstOrDefaultAsync(b =>
-                b.FamilyGroupId == familyGroupId &&
-                b.Year == request.Year &&
-                b.Month == request.Month);
-
-            if (budget == null)
-            {
-                budget = new FamilyBudget
-                {
-                    FamilyGroupId = familyGroupId,
-                    Year = request.Year,
-                    Month = request.Month,
-                    MonthlyLimit = request.MonthlyLimit,
-                    Warning80Sent = false,
-                    Exceeded100Sent = false
-                };
-
-                _db.FamilyBudgets.Add(budget);
-            }
-            else
-            {
-                budget.MonthlyLimit = request.MonthlyLimit;
-            }
-
-            try
-            {
-                await _db.SaveChangesAsync();
-            }
-            catch (DbUpdateException)
-            {
-                if (budget != null &&
-                    _db.Entry(budget).State != EntityState.Detached)
-                {
-                    _db.Entry(budget).State = EntityState.Detached;
-                }
-
-                var concurrentBudget = await _db.FamilyBudgets
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(b =>
-                        b.FamilyGroupId == familyGroupId &&
-                        b.Year == request.Year &&
-                        b.Month == request.Month);
-
-                if (concurrentBudget != null)
-                {
-                    return Conflict(new ProblemDetails
-                    {
-                        Status = StatusCodes.Status409Conflict,
-                        Title = "Hạn mức tháng đã được cập nhật đồng thời",
-                        Detail = "Hãy gửi lại yêu cầu để áp dụng hạn mức mới."
-                    });
-                }
-
-                throw;
-            }
-
-            try
-            {
-                await _alerts.EvaluateAsync(
-                    familyGroupId,
-                    budget.Year,
-                    budget.Month);
-            }
-            catch (Exception exception)
-            {
-                _logger.LogWarning(
-                    exception,
-                    "Hạn mức đã được lưu nhưng cảnh báo ngân sách không thể đánh giá.");
-            }
-
-            return Ok(new
-            {
-                message = "Đã lưu hạn mức tháng.",
-                budget.FamilyGroupId,
-                budget.Year,
-                budget.Month,
-                budget.MonthlyLimit
-            });
+            await _db.SaveChangesAsync();
         }
-        finally
+        catch (DbUpdateException)
         {
-            BudgetLock.Release();
+            if (_db.Entry(budget).State != EntityState.Detached)
+            {
+                _db.Entry(budget).State = EntityState.Detached;
+            }
+
+            var concurrentBudget = await _db.FamilyBudgets
+                .FirstOrDefaultAsync(b =>
+                    b.FamilyGroupId == familyGroupId &&
+                    b.Year == request.Year &&
+                    b.Month == request.Month);
+
+            if (concurrentBudget == null)
+                throw;
+
+            concurrentBudget.MonthlyLimit = request.MonthlyLimit;
+            await _db.SaveChangesAsync();
+            budget = concurrentBudget;
         }
+
+        try
+        {
+            await _alerts.EvaluateAsync(
+                familyGroupId,
+                budget.Year,
+                budget.Month);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Hạn mức đã được lưu nhưng cảnh báo ngân sách không thể đánh giá.");
+        }
+
+        return Ok(new
+        {
+            message = "Đã lưu hạn mức tháng.",
+            budget.FamilyGroupId,
+            budget.Year,
+            budget.Month,
+            budget.MonthlyLimit
+        });
     }
 }
 
