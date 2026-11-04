@@ -106,6 +106,116 @@ public class AuthController : ControllerBase
         return Ok(await CreateResponse(user));
     }
 
+    [HttpPost("password/reset")]
+    [EnableRateLimiting("auth")]
+    public async Task<IActionResult> ResetPassword([FromBody] PasswordResetRequest request)
+    {
+        var email = NormalizeEmail(request.Email);
+        if (string.IsNullOrWhiteSpace(email))
+            return BadRequest(new { message = "Email không hợp lệ." });
+
+        var otpResult = await _otpAuth.VerifyAsync(email, request.Otp ?? "");
+        if (!otpResult.Succeeded)
+        {
+            if (otpResult.Expired)
+                return BadRequest(new { message = "Mã OTP đã hết hạn. Vui lòng yêu cầu mã mới." });
+            if (otpResult.Locked)
+                return StatusCode(StatusCodes.Status423Locked, new
+                {
+                    message = "Bạn đã nhập sai quá nhiều lần. Vui lòng yêu cầu mã OTP mới."
+                });
+            return Unauthorized(new { message = "Mã OTP không đúng." });
+        }
+
+        var user = await _users.FindByEmailAsync(email);
+        if (user == null)
+        {
+            return Ok(new
+            {
+                message = "Nếu tài khoản tồn tại, mật khẩu đã được đặt lại."
+            });
+        }
+
+        if (await _users.HasPasswordAsync(user))
+        {
+            var removeResult = await _users.RemovePasswordAsync(user);
+            if (!removeResult.Succeeded)
+            {
+                return BadRequest(new
+                {
+                    message = "Không thể đặt lại mật khẩu.",
+                    errors = removeResult.Errors.Select(x => x.Description).ToArray()
+                });
+            }
+        }
+
+        var addResult = await _users.AddPasswordAsync(user, request.NewPassword ?? "");
+        if (!addResult.Succeeded)
+        {
+            return BadRequest(new
+            {
+                message = "Không thể đặt lại mật khẩu.",
+                errors = addResult.Errors.Select(x => x.Description).ToArray()
+            });
+        }
+
+        await _users.ResetAccessFailedCountAsync(user);
+        await _users.SetLockoutEndDateAsync(user, null);
+        user.EmailConfirmed = true;
+        var updateResult = await _users.UpdateAsync(user);
+        if (!updateResult.Succeeded)
+        {
+            return BadRequest(new
+            {
+                message = "Không thể cập nhật tài khoản.",
+                errors = updateResult.Errors.Select(x => x.Description).ToArray()
+            });
+        }
+
+        return Ok(new { message = "Mật khẩu đã được đặt lại." });
+    }
+
+    [HttpPost("password/change")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> ChangePassword([FromBody] PasswordChangeRequest request)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrEmpty(userId))
+            return Unauthorized(new { message = "Phiên đăng nhập không hợp lệ." });
+
+        var user = await _users.FindByIdAsync(userId);
+        if (user == null)
+            return Unauthorized(new { message = "Không tìm thấy tài khoản." });
+
+        IdentityResult result;
+        if (!await _users.HasPasswordAsync(user))
+        {
+            result = await _users.AddPasswordAsync(user, request.NewPassword ?? "");
+        }
+        else if (await _users.CheckPasswordAsync(user, request.CurrentPassword ?? ""))
+        {
+            result = await _users.ChangePasswordAsync(
+                user,
+                request.CurrentPassword ?? "",
+                request.NewPassword ?? "");
+        }
+        else
+        {
+            return BadRequest(new { message = "Mật khẩu hiện tại không đúng." });
+        }
+
+        if (!result.Succeeded)
+        {
+            return BadRequest(new
+            {
+                message = "Không thể đổi mật khẩu.",
+                errors = result.Errors.Select(x => x.Description).ToArray()
+            });
+        }
+
+        return Ok(new { message = "Mật khẩu đã được đổi." });
+    }
+
     [HttpPost("otp/request")]
     [EnableRateLimiting("auth")]
     public async Task<IActionResult> RequestOtp([FromBody] OtpRequestRequest request)
@@ -265,4 +375,17 @@ public class OtpVerifyRequest
 
     [Required]
     public string Otp { get; set; } = "";
+}
+
+public class PasswordResetRequest
+{
+    public string Email { get; set; } = "";
+    public string Otp { get; set; } = "";
+    public string NewPassword { get; set; } = "";
+}
+
+public class PasswordChangeRequest
+{
+    public string CurrentPassword { get; set; } = "";
+    public string NewPassword { get; set; } = "";
 }
